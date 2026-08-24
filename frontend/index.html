@@ -1,0 +1,948 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Buy託了AI｜日韓藥妝智慧推薦</title>
+<style>
+  :root {
+    --bg: #f2f5f1;
+    --surface: #ffffff;
+    --surface-2: #eaeee8;
+    --border: #d8ded4;
+    --ink: #1a231d;
+    --ink-soft: #57635a;
+    --ink-faint: #8a978c;
+    --accent: #146a4f;
+    --accent-strong: #0f5540;
+    --accent-soft: #dcefe4;
+    --accent-soft-border: #b7dcc7;
+    --coral: #c65b45;
+    --coral-soft: #fbe7e1;
+    --warn: #a3671f;
+    --warn-soft: #f6e7d1;
+    --shadow: 0 1px 2px rgba(20, 30, 22, 0.05), 0 8px 24px rgba(20, 30, 22, 0.06);
+  }
+
+  * { box-sizing: border-box; }
+
+  /* ── 登入/註冊 ───────────────────────────────── */
+
+  .auth-bar {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 10px;
+    font-size: 13.5px;
+    color: var(--ink-soft);
+    padding: 14px 0 0;
+  }
+
+  .auth-bar button {
+    font: inherit;
+    font-size: 13.5px;
+    font-weight: 700;
+    color: var(--accent-strong);
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px 2px;
+  }
+  .auth-bar button:hover { text-decoration: underline; }
+  .auth-bar .user-email { color: var(--ink); font-weight: 600; }
+
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(20, 30, 22, 0.45);
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    padding: 20px;
+  }
+  .modal-overlay.open { display: flex; }
+
+  .modal {
+    background: var(--surface);
+    border-radius: 16px;
+    box-shadow: var(--shadow);
+    width: 100%;
+    max-width: 360px;
+    padding: 24px;
+  }
+
+  .modal-tabs {
+    display: flex;
+    gap: 4px;
+    background: var(--surface-2);
+    border-radius: 10px;
+    padding: 4px;
+    margin-bottom: 18px;
+  }
+  .modal-tabs button {
+    flex: 1;
+    font: inherit;
+    font-size: 13.5px;
+    font-weight: 700;
+    padding: 8px;
+    border: none;
+    border-radius: 8px;
+    background: none;
+    color: var(--ink-soft);
+    cursor: pointer;
+  }
+  .modal-tabs button.active {
+    background: var(--surface);
+    color: var(--accent-strong);
+    box-shadow: var(--shadow);
+  }
+
+  .modal form { display: flex; flex-direction: column; gap: 12px; }
+  .modal label {
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    font-weight: 700;
+    display: block;
+    margin-bottom: 5px;
+  }
+  .modal input {
+    width: 100%;
+    font-size: 14.5px;
+    padding: 10px 12px;
+    border: 1.5px solid var(--border);
+    border-radius: 8px;
+    font-family: inherit;
+    color: var(--ink);
+  }
+  .modal input:focus { outline: none; border-color: var(--accent); }
+
+  .modal .submit-btn {
+    margin-top: 4px;
+    font: inherit;
+    font-size: 14.5px;
+    font-weight: 700;
+    padding: 11px;
+    border: none;
+    border-radius: 9px;
+    background: var(--accent);
+    color: white;
+    cursor: pointer;
+  }
+  .modal .submit-btn:hover { background: var(--accent-strong); }
+  .modal .submit-btn:disabled { background: var(--ink-faint); cursor: wait; }
+
+  .modal .close-btn {
+    position: absolute;
+    top: 14px;
+    right: 16px;
+    background: none;
+    border: none;
+    font-size: 18px;
+    color: var(--ink-faint);
+    cursor: pointer;
+  }
+  .modal-inner { position: relative; }
+
+  .modal-msg {
+    font-size: 13px;
+    padding: 9px 12px;
+    border-radius: 8px;
+    margin-bottom: 4px;
+  }
+  .modal-msg.error { background: var(--coral-soft); color: var(--coral); }
+  .modal-msg.success { background: var(--accent-soft); color: var(--accent-strong); }
+
+  .history-empty { font-size: 13.5px; color: var(--ink-faint); margin: 0; }
+  #historyList { display: flex; flex-direction: column; gap: 8px; max-height: 360px; overflow-y: auto; }
+  .history-item {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .history-item:hover { background: var(--surface-2); }
+  .history-query { font-size: 14px; font-weight: 700; color: var(--ink); }
+  .history-meta { font-size: 12px; color: var(--ink-faint); margin-top: 3px; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Noto Sans TC", "PingFang TC", "Hiragino Sans", "Microsoft JhengHei", "Segoe UI", sans-serif;
+    line-height: 1.6;
+  }
+
+  .mono { font-family: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace; }
+
+  .page { max-width: 1080px; margin: 0 auto; padding: 40px 24px 96px; }
+
+  header.top {
+    text-align: center;
+    padding-bottom: 28px;
+    margin-bottom: 32px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .eyebrow {
+    font-size: 12.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 700;
+    font-family: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+  }
+
+  h1 {
+    font-size: 32px;
+    margin: 8px 0 6px;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+  }
+
+  .subtitle { color: var(--ink-soft); font-size: 15px; margin: 0; }
+
+  /* ── 搜尋區 ───────────────────────────────── */
+
+  .search-panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    box-shadow: var(--shadow);
+    padding: 24px;
+  }
+
+  .search-row { display: flex; gap: 10px; }
+
+  #query {
+    flex: 1;
+    font-size: 16px;
+    padding: 14px 16px;
+    border: 1.5px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface);
+    color: var(--ink);
+    font-family: inherit;
+  }
+  #query:focus { outline: none; border-color: var(--accent); }
+
+  #searchBtn {
+    font-size: 15px;
+    font-weight: 700;
+    padding: 0 26px;
+    border: none;
+    border-radius: 10px;
+    background: var(--accent);
+    color: white;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  #searchBtn:hover { background: var(--accent-strong); }
+  #searchBtn:disabled { background: var(--ink-faint); cursor: wait; }
+
+  .suggestions {
+    margin-top: 14px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .suggestions .label {
+    font-size: 12.5px;
+    color: var(--ink-faint);
+    margin-right: 2px;
+  }
+
+  .chip {
+    font-size: 13.5px;
+    padding: 6px 13px;
+    border-radius: 999px;
+    border: 1px solid var(--accent-soft-border);
+    background: var(--accent-soft);
+    color: var(--accent-strong);
+    cursor: pointer;
+    font-family: inherit;
+    transition: transform 0.1s, background 0.15s;
+  }
+  .chip:hover { background: var(--accent-soft-border); }
+  .chip:active { transform: scale(0.97); }
+
+  .chip-hint {
+    margin-top: 6px;
+    font-size: 12.5px;
+    color: var(--ink-faint);
+  }
+
+  .filters {
+    margin-top: 18px;
+    padding-top: 18px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 18px;
+    align-items: flex-end;
+  }
+
+  .field { display: flex; flex-direction: column; gap: 5px; }
+  .field label {
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    font-weight: 700;
+  }
+  .field select, .field input {
+    font-size: 14px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-family: inherit;
+    color: var(--ink);
+    background: var(--surface);
+  }
+  .field input[type="number"] { width: 110px; }
+  .field select { width: 120px; }
+
+  /* ── 狀態列 ───────────────────────────────── */
+
+  #statusBar {
+    margin-top: 14px;
+    font-size: 13.5px;
+    color: var(--ink-soft);
+    min-height: 18px;
+  }
+  #statusBar.error { color: var(--coral); }
+
+  /* ── 結果卡片 ───────────────────────────────── */
+
+  #results {
+    margin-top: 28px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 18px;
+  }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .card .thumb {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    background: var(--surface-2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+  .card .thumb img { width: 100%; height: 100%; object-fit: cover; }
+  .card .thumb .placeholder { color: var(--ink-faint); font-size: 13px; }
+
+  .card .body { padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
+
+  .tag-row { display: flex; gap: 6px; flex-wrap: wrap; }
+
+  .tag {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 999px;
+    letter-spacing: 0.03em;
+  }
+  .tag.origin-jp { background: #e3edf7; color: #2d5a8c; }
+  .tag.origin-kr { background: var(--coral-soft); color: var(--coral); }
+  .tag.platform { background: var(--surface-2); color: var(--ink-soft); }
+  .tag.similarity { background: var(--accent-soft); color: var(--accent-strong); }
+
+  .card .name {
+    font-size: 14.5px;
+    font-weight: 700;
+    line-height: 1.4;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .card .brand { font-size: 12.5px; color: var(--ink-soft); }
+
+  .card .price-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-top: 2px;
+  }
+  .card .price { font-size: 17px; font-weight: 800; font-family: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace; }
+  .card .price-original { font-size: 11.5px; color: var(--ink-faint); margin-top: -4px; }
+  .card .rating { font-size: 12.5px; color: var(--warn); font-weight: 700; }
+
+  .reviews-block {
+    margin-top: 6px;
+    padding-top: 10px;
+    border-top: 1px dashed var(--border);
+  }
+
+  .reviews-block .summary {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    font-size: 12.5px;
+    color: var(--ink-soft);
+    margin-bottom: 6px;
+  }
+
+  .sentiment-pill {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 999px;
+  }
+  .sentiment-pill.pos { background: var(--accent-soft); color: var(--accent-strong); }
+  .sentiment-pill.neg { background: var(--coral-soft); color: var(--coral); }
+
+  .review-item {
+    font-size: 12px;
+    color: var(--ink-soft);
+    padding: 4px 0;
+    display: flex;
+    gap: 6px;
+  }
+  .review-item .src {
+    flex: none;
+    font-size: 10.5px;
+    font-weight: 700;
+    padding: 0 5px;
+    border-radius: 4px;
+    background: var(--surface-2);
+    color: var(--ink-faint);
+    height: fit-content;
+  }
+  .review-item .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .no-reviews { font-size: 12px; color: var(--ink-faint); font-style: italic; }
+  .ai-summary-text { font-size: 12.5px; color: var(--ink); line-height: 1.6; margin: 4px 0 6px; }
+  .ai-summary-for { font-size: 12px; color: var(--accent-strong); font-weight: 600; margin: 0; }
+
+  #emptyState, #initialState {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--ink-faint);
+    font-size: 14px;
+  }
+
+  footer.tail {
+    margin-top: 56px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border);
+    font-size: 12.5px;
+    color: var(--ink-faint);
+    text-align: center;
+  }
+  footer.tail code {
+    background: var(--surface-2);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-family: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+  }
+
+  @media (max-width: 560px) {
+    .search-row { flex-direction: column; }
+    #searchBtn { padding: 12px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="page">
+
+  <div class="auth-bar" id="authBar">
+    <button onclick="openAuthModal('login')">登入</button>
+    <span>·</span>
+    <button onclick="openAuthModal('register')">註冊</button>
+  </div>
+
+  <header class="top">
+    <div class="eyebrow">RAG × Sentiment × Recommendation</div>
+    <h1>Buy託了AI</h1>
+    <p class="subtitle">日韓藥妝智慧推薦系統 — 輸入需求，找有真實評論佐證的商品</p>
+  </header>
+
+  <div class="search-panel">
+    <div class="search-row">
+      <input id="query" type="text" placeholder="例如：乾性肌保濕精華，預算500以內" />
+      <button id="searchBtn" onclick="doSearch()">搜尋</button>
+    </div>
+
+    <div class="suggestions" id="suggestions"></div>
+    <div class="chip-hint">💡 上面這些是實測過「資料最完整」的查詢——同時查得到商品資料、平台評分、跟真實社群評論。隨便打的關鍵字也能查，但不一定每筆商品都配對得到評論。</div>
+
+    <div class="filters">
+      <div class="field">
+        <label>國家</label>
+        <select id="country">
+          <option value="">日韓都找</option>
+          <option value="JP">日本</option>
+          <option value="KR">韓國</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>預算上限（新台幣）</label>
+        <input id="budget" type="number" placeholder="不限，例如 500" min="0" />
+      </div>
+      <div class="field">
+        <label>分類關鍵字</label>
+        <input id="category" type="text" placeholder="例如：防曬" />
+      </div>
+      <div class="field">
+        <label>回傳筆數</label>
+        <select id="topk">
+          <option value="6">6</option>
+          <option value="10" selected>10</option>
+          <option value="20">20</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>排序方式</label>
+        <select id="sortBy" onchange="onSortChange()">
+          <option value="relevance" selected>相關度</option>
+          <option value="rating">好評率高→低</option>
+          <option value="price_low">價格低→高</option>
+          <option value="price_high">價格高→低</option>
+        </select>
+      </div>
+    </div>
+
+    <div id="statusBar"></div>
+  </div>
+
+  <div id="initialState">在上面輸入需求，或直接點一個建議查詢試試看 ↑</div>
+  <div id="results"></div>
+
+</div>
+
+<footer class="tail">
+  這個頁面呼叫本機 API <code>http://localhost:8000/recommend</code>，
+  伺服器沒開的話請先在 <code>drugstore-demo</code> 資料夾執行
+  <code>python -m uvicorn api.main:app --reload --port 8000</code>
+</footer>
+
+<div class="modal-overlay" id="authModal">
+  <div class="modal">
+    <div class="modal-inner">
+      <button class="close-btn" onclick="closeAuthModal()">✕</button>
+
+      <div class="modal-tabs">
+        <button id="tabLogin" onclick="switchAuthTab('login')">登入</button>
+        <button id="tabRegister" onclick="switchAuthTab('register')">註冊</button>
+      </div>
+
+      <div id="authMsg"></div>
+
+      <form id="loginForm" onsubmit="return submitLogin(event)">
+        <div>
+          <label>Email</label>
+          <input type="email" id="loginEmail" required />
+        </div>
+        <div>
+          <label>密碼</label>
+          <input type="password" id="loginPassword" required />
+        </div>
+        <button type="submit" class="submit-btn" id="loginSubmitBtn">登入</button>
+      </form>
+
+      <form id="registerForm" style="display:none" onsubmit="return submitRegister(event)">
+        <div>
+          <label>Email</label>
+          <input type="email" id="registerEmail" required />
+        </div>
+        <div>
+          <label>密碼（至少 8 碼）</label>
+          <input type="password" id="registerPassword" minlength="8" required />
+        </div>
+        <div>
+          <label>確認密碼</label>
+          <input type="password" id="registerConfirmPassword" minlength="8" required />
+        </div>
+        <button type="submit" class="submit-btn" id="registerSubmitBtn">註冊</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="historyModal">
+  <div class="modal">
+    <div class="modal-inner">
+      <button class="close-btn" onclick="closeHistoryModal()">✕</button>
+      <h3 style="margin:0 0 4px;">我的搜尋紀錄</h3>
+      <p style="margin:0 0 16px;font-size:13px;color:var(--ink-soft);">只有你自己看得到，點一筆可以重新搜尋</p>
+      <div id="historyList"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API_BASE = "http://localhost:8000";
+
+// 實測過會回傳「商品 + 真實評論」資料最完整的查詢範例
+const SUGGESTED_QUERIES = [
+  { label: "防曬乳，怕曬黑", query: "防曬乳，怕曬黑", country: "JP" },
+  { label: "敏感肌防曬不留白", query: "敏感肌適用防曬，不留白", country: "" },
+  { label: "乾性肌保濕精華", query: "乾性肌保濕精華", country: "" },
+  { label: "遮瑕黑眼圈", query: "遮瑕膏黑眼圈", country: "" },
+  { label: "眼影腮紅彩妝", query: "眼影腮紅彩妝", country: "" },
+];
+
+function renderSuggestions() {
+  const wrap = document.getElementById("suggestions");
+  const label = document.createElement("span");
+  label.className = "label";
+  label.textContent = "快速試試：";
+  wrap.appendChild(label);
+
+  SUGGESTED_QUERIES.forEach(s => {
+    const btn = document.createElement("button");
+    btn.className = "chip";
+    btn.textContent = s.label;
+    btn.onclick = () => {
+      document.getElementById("query").value = s.query;
+      document.getElementById("country").value = s.country || "";
+      doSearch();
+    };
+    wrap.appendChild(btn);
+  });
+}
+
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str || "";
+  return div.innerHTML;
+}
+
+function renderCard(item) {
+  const originTag = item.origin === "JP"
+    ? '<span class="tag origin-jp">🇯🇵 日本</span>'
+    : item.origin === "KR"
+      ? '<span class="tag origin-kr">🇰🇷 韓國</span>'
+      : "";
+
+  const priceText = item.price_twd != null
+    ? `NT$ ${item.price_twd.toLocaleString()}`
+    : "價格未提供";
+  const priceOriginalText = (item.price_original != null && item.currency_original)
+    ? `原價 ${item.price_original.toLocaleString()} ${item.currency_original}`
+    : "";
+
+  const ratingText = item.rating_platform != null
+    ? `★ ${item.rating_platform.toFixed(1)}${item.review_count_platform ? ` (${item.review_count_platform.toLocaleString()})` : ""}`
+    : "";
+
+  let reviewsHtml;
+  if (item.matched_review_count > 0) {
+    const posRateText = item.sentiment_pos_rate != null
+      ? `好評率 ${Math.round(item.sentiment_pos_rate * 100)}%`
+      : "";
+    const statLine = `
+      <div class="summary">
+        評論配對 ${item.matched_review_count} 篇${posRateText ? "・" + posRateText : ""}
+        <span class="sentiment-pill pos">正 ${item.sentiment_positive}</span>
+        <span class="sentiment-pill neg">負 ${item.sentiment_negative}</span>
+      </div>`;
+
+    if (item.ai_summary && item.ai_summary.summary) {
+      // 有 AI 摘要就優先顯示摘要，不要再列一堆評論標題
+      reviewsHtml = `
+        <div class="reviews-block">
+          ${statLine}
+          <p class="ai-summary-text">${escapeHtml(item.ai_summary.summary)}</p>
+          <p class="ai-summary-for">💡 適合：${escapeHtml(item.ai_summary.suggested_for)}</p>
+        </div>`;
+    } else {
+      const items = item.sample_reviews.map(r => {
+        const mark = r.sentiment === "positive" ? "👍" : "👎";
+        return `<div class="review-item">
+                  <span class="src">${escapeHtml(r.source)}</span>
+                  <span class="title">${mark} ${escapeHtml(r.title)}</span>
+                </div>`;
+      }).join("");
+      reviewsHtml = `
+        <div class="reviews-block">
+          ${statLine}
+          ${items}
+        </div>`;
+    }
+  } else {
+    reviewsHtml = `<div class="reviews-block"><div class="no-reviews">目前沒有配對到社群評論</div></div>`;
+  }
+
+  const thumb = item.image_url
+    ? `<img src="${escapeHtml(item.image_url)}" alt="" loading="lazy" onerror="this.parentElement.innerHTML='<span class=&quot;placeholder&quot;>無圖片</span>'" />`
+    : `<span class="placeholder">無圖片</span>`;
+
+  return `
+    <div class="card">
+      <div class="thumb">${thumb}</div>
+      <div class="body">
+        <div class="tag-row">
+          ${originTag}
+          <span class="tag platform">${escapeHtml(item.source_platform)}</span>
+          <span class="tag similarity">相似度 ${item.similarity}</span>
+        </div>
+        <div class="name">${escapeHtml(item.name)}</div>
+        <div class="brand">${escapeHtml(item.brand) || "（無品牌資訊）"} · ${escapeHtml(item.category) || "未分類"}</div>
+        <div class="price-row">
+          <span class="price">${priceText}</span>
+          <span class="rating">${ratingText}</span>
+        </div>
+        ${priceOriginalText ? `<div class="price-original">${priceOriginalText}</div>` : ""}
+        ${reviewsHtml}
+      </div>
+    </div>`;
+}
+
+let hasSearched = false;
+
+function onSortChange() {
+  // 排序只有在已經查詢過一次之後改變才需要重新查，避免使用者一進頁面就莫名其妙送出空查詢
+  if (hasSearched) doSearch();
+}
+
+async function doSearch() {
+  const query = document.getElementById("query").value.trim();
+  const statusBar = document.getElementById("statusBar");
+  const resultsEl = document.getElementById("results");
+  const initialEl = document.getElementById("initialState");
+  const btn = document.getElementById("searchBtn");
+
+  if (!query) {
+    statusBar.className = "error";
+    statusBar.textContent = "請輸入查詢內容";
+    return;
+  }
+
+  const body = {
+    query,
+    top_k: parseInt(document.getElementById("topk").value, 10),
+    sort_by: document.getElementById("sortBy").value,
+  };
+  const country = document.getElementById("country").value;
+  const budget = document.getElementById("budget").value;
+  const category = document.getElementById("category").value.trim();
+  if (country) body.country = country;
+  if (budget) body.budget = parseInt(budget, 10);
+  if (category) body.category = category;
+
+  hasSearched = true;
+
+  btn.disabled = true;
+  btn.textContent = "搜尋中…";
+  statusBar.className = "";
+  statusBar.textContent = "查詢中，第一次呼叫需要載入嵌入模型，可能要等幾秒…";
+  initialEl.style.display = "none";
+  resultsEl.innerHTML = "";
+
+  try {
+    const headers = { "Content-Type": "application/json" };
+    const token = localStorage.getItem("buytuoleai_token");
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+
+    const resp = await fetch(`${API_BASE}/recommend`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      const errText = await resp.text();
+      throw new Error(`API 回傳錯誤 (${resp.status})：${errText.slice(0, 200)}`);
+    }
+    const data = await resp.json();
+
+    if (data.count === 0) {
+      statusBar.textContent = "沒有符合條件的商品，試試看放寬預算或不限國家。";
+      resultsEl.innerHTML = "";
+    } else {
+      const withReviews = data.results.filter(r => r.matched_review_count > 0).length;
+      statusBar.textContent = `找到 ${data.count} 筆商品，其中 ${withReviews} 筆有配對到真實評論`;
+      resultsEl.innerHTML = data.results.map(renderCard).join("");
+    }
+  } catch (err) {
+    statusBar.className = "error";
+    statusBar.textContent = `連不上推薦系統：${err.message}　（請確認 API 伺服器有開：cd drugstore-demo 後執行 python -m uvicorn api.main:app --reload --port 8000）`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "搜尋";
+  }
+}
+
+document.getElementById("query").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") doSearch();
+});
+
+renderSuggestions();
+
+// ── 會員系統：登入 / 註冊 / 登出 ──────────────────────────────────
+
+function openAuthModal(tab) {
+  document.getElementById("authMsg").innerHTML = "";
+  switchAuthTab(tab || "login");
+  document.getElementById("authModal").classList.add("open");
+}
+
+function closeAuthModal() {
+  document.getElementById("authModal").classList.remove("open");
+}
+
+function switchAuthTab(tab) {
+  const isLogin = tab === "login";
+  document.getElementById("tabLogin").classList.toggle("active", isLogin);
+  document.getElementById("tabRegister").classList.toggle("active", !isLogin);
+  document.getElementById("loginForm").style.display = isLogin ? "flex" : "none";
+  document.getElementById("registerForm").style.display = isLogin ? "none" : "flex";
+  document.getElementById("authMsg").innerHTML = "";
+}
+
+function showAuthMsg(text, type) {
+  document.getElementById("authMsg").innerHTML =
+    `<div class="modal-msg ${type}">${escapeHtml(text)}</div>`;
+}
+
+function renderAuthBar() {
+  const email = localStorage.getItem("buytuoleai_email");
+  const bar = document.getElementById("authBar");
+  if (email) {
+    bar.innerHTML = `<button onclick="openHistoryModal()">🕘 我的搜尋紀錄</button><span>·</span><span class="user-email">${escapeHtml(email)}</span><span>·</span><button onclick="doLogout()">登出</button>`;
+  } else {
+    bar.innerHTML = `<button onclick="openAuthModal('login')">登入</button><span>·</span><button onclick="openAuthModal('register')">註冊</button>`;
+  }
+}
+
+async function openHistoryModal() {
+  const token = localStorage.getItem("buytuoleai_token");
+  const listEl = document.getElementById("historyList");
+  listEl.innerHTML = `<p class="history-empty">載入中…</p>`;
+  document.getElementById("historyModal").classList.add("open");
+
+  try {
+    const resp = await fetch(`${API_BASE}/auth/history`, {
+      headers: { "Authorization": `Bearer ${token}` },
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || "讀取搜尋紀錄失敗");
+
+    if (data.history.length === 0) {
+      listEl.innerHTML = `<p class="history-empty">還沒有搜尋紀錄，登入後搜尋會自動記錄在這裡（只有你自己看得到）。</p>`;
+      return;
+    }
+    listEl.innerHTML = data.history.map(h => {
+      const when = new Date(h.created_at + "Z").toLocaleString("zh-TW");
+      const tags = [
+        h.country ? (h.country === "JP" ? "🇯🇵 日本" : "🇰🇷 韓國") : null,
+        h.budget ? `預算 NT$${h.budget}` : null,
+        h.category ? `分類：${h.category}` : null,
+      ].filter(Boolean).join(" · ");
+      return `<div class="history-item" onclick="rerunHistoryQuery(${JSON.stringify(h.query)}, ${JSON.stringify(h.country || "")})">
+                <div class="history-query">${escapeHtml(h.query)}</div>
+                <div class="history-meta">${when}${tags ? " · " + tags : ""}</div>
+              </div>`;
+    }).join("");
+  } catch (err) {
+    listEl.innerHTML = `<p class="history-empty">${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function closeHistoryModal() {
+  document.getElementById("historyModal").classList.remove("open");
+}
+
+function rerunHistoryQuery(query, country) {
+  document.getElementById("query").value = query;
+  document.getElementById("country").value = country || "";
+  closeHistoryModal();
+  doSearch();
+}
+
+async function submitRegister(event) {
+  event.preventDefault();
+  const email = document.getElementById("registerEmail").value.trim();
+  const password = document.getElementById("registerPassword").value;
+  const confirm_password = document.getElementById("registerConfirmPassword").value;
+  const btn = document.getElementById("registerSubmitBtn");
+
+  btn.disabled = true;
+  try {
+    const resp = await fetch(`${API_BASE}/auth/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password, confirm_password }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || "註冊失敗");
+    showAuthMsg("註冊成功，換到「登入」分頁登入吧", "success");
+    document.getElementById("loginEmail").value = email;
+    switchAuthTab("login");
+  } catch (err) {
+    showAuthMsg(err.message, "error");
+  } finally {
+    btn.disabled = false;
+  }
+  return false;
+}
+
+async function submitLogin(event) {
+  event.preventDefault();
+  const email = document.getElementById("loginEmail").value.trim();
+  const password = document.getElementById("loginPassword").value;
+  const btn = document.getElementById("loginSubmitBtn");
+
+  btn.disabled = true;
+  try {
+    const resp = await fetch(`${API_BASE}/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || "登入失敗");
+    localStorage.setItem("buytuoleai_token", data.token);
+    localStorage.setItem("buytuoleai_email", email);
+    renderAuthBar();
+    closeAuthModal();
+  } catch (err) {
+    showAuthMsg(err.message, "error");
+  } finally {
+    btn.disabled = false;
+  }
+  return false;
+}
+
+async function doLogout() {
+  const token = localStorage.getItem("buytuoleai_token");
+  try {
+    if (token) {
+      await fetch(`${API_BASE}/auth/logout`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${token}` },
+      });
+    }
+  } catch (err) {
+    // 就算 API 呼叫失敗（例如 token 已過期）也讓前端照樣登出，不卡住使用者
+  }
+  localStorage.removeItem("buytuoleai_token");
+  localStorage.removeItem("buytuoleai_email");
+  renderAuthBar();
+}
+
+renderAuthBar();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,14 @@
+# 機密設定，真正的 key 只留在本機
+.env
+
+# 可重建的向量索引，不用進版控（跑 rag/embedder.py 的 build_product_index() 就能重建）
+chroma_db/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# OS
+.DS_Store
+Thumbs.db

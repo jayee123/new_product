@@ -1,0 +1,6 @@
+# 只裝圖片測試需要的套件（輕量，快速安裝）
+# python -m pip install -r requirements-minimal.txt
+
+openai==1.35.0
+requests==2.31.0
+python-dotenv==1.0.1

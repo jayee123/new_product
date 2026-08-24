@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<title>系統架構圖 - Buy 託了 AI</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Microsoft JhengHei', 'Noto Sans TC', sans-serif;
+  background: #eef2f7;
+  padding: 40px 20px;
+  display: flex;
+  justify-content: center;
+}
+
+/* ── 外框 ── */
+.outer {
+  border: 4px solid #1e293b;
+  border-radius: 0;
+  background: #fff;
+  padding: 28px 32px 24px;
+  width: 860px;
+  box-shadow: 0 6px 28px rgba(0,0,0,.14);
+}
+
+.diagram-title {
+  text-align: center;
+  font-size: 17px;
+  font-weight: bold;
+  letter-spacing: 4px;
+  color: #1e293b;
+  margin-bottom: 24px;
+}
+
+/* ── 兩欄 ── */
+.cols {
+  display: grid;
+  grid-template-columns: 1fr 28px 1fr;
+  align-items: start;
+}
+
+/* 中間虛線分隔 */
+.divider {
+  padding-top: 46px;
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0px, transparent 6px,
+    #b0bec5 6px, #b0bec5 9px
+  );
+  background-position: center top;
+  background-size: 2px 100%;
+  background-repeat: no-repeat;
+  align-self: stretch;
+}
+
+/* ── 區塊標題 ── */
+.sec-label {
+  text-align: center;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 4px 14px;
+  border-radius: 20px;
+  margin-bottom: 14px;
+  letter-spacing: 1px;
+}
+.sec-offline { background:#dbeafe; color:#1d4ed8; border:1.5px solid #93c5fd; }
+.sec-online  { background:#dcfce7; color:#15803d; border:1.5px solid #86efac; }
+
+/* ── 元件方框 ── */
+.box {
+  border: 2px solid #888;
+  border-radius: 0;
+  padding: 9px 14px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1e293b;
+  line-height: 1.45;
+  width: 100%;
+}
+.box small {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 400;
+  color: #64748b;
+  margin-top: 3px;
+}
+
+/* 顏色 */
+.b-scraper { background:#fffbeb; border-color:#f59e0b; }
+.b-gemini  { background:#ecfdf5; border-color:#059669; }
+.b-mongo   { background:#f0fdf4; border-color:#16a34a; }
+.b-roberta { background:#faf5ff; border-color:#7c3aed; }
+.b-st      { background:#eff6ff; border-color:#3b82f6; }
+.b-chroma  { background:#fff7ed; border-color:#ea580c; }
+.b-user    { background:#f8fafc; border-color:#475569; }
+.b-api     { background:#eff6ff; border-color:#1d4ed8; }
+.b-merge   { background:#f1f5f9; border-color:#94a3b8; }
+.b-mysql   { background:#fefce8; border-color:#ca8a04; }
+
+/* ── 垂直連接線 ── */
+.vc {
+  display: flex;
+  justify-content: center;
+  height: 18px;
+}
+.vc div { border-left: 3px dashed #9ca3af; height: 100%; }
+
+/* ── 分叉接頭：FastAPI → MongoDB + ChromaDB ── */
+/*
+       │  (center vertical)
+  ─────┴─────  (horizontal + side verticals)
+  │         │
+*/
+.junc-split {
+  position: relative;
+  height: 36px;
+  width: 52%;
+  margin: 0 24%;
+}
+.junc-split::before {
+  content: '';
+  position: absolute;
+  left: calc(50% - 1.5px);
+  top: 0;
+  height: 50%;
+  border-left: 3px dashed #9ca3af;
+}
+.junc-split::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 0; right: 0; bottom: 0;
+  border-top: 3px dashed #9ca3af;
+  border-left: 3px dashed #9ca3af;
+  border-right: 3px dashed #9ca3af;
+}
+
+/* ── 合併接頭：MongoDB + ChromaDB → 合併結果 ── */
+/*
+  │         │
+  ─────┬─────
+       │  (center vertical)
+*/
+.junc-join {
+  position: relative;
+  height: 36px;
+  width: 52%;
+  margin: 0 24%;
+}
+.junc-join::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 50%;
+  border-bottom: 3px dashed #9ca3af;
+  border-left: 3px dashed #9ca3af;
+  border-right: 3px dashed #9ca3af;
+}
+.junc-join::after {
+  content: '';
+  position: absolute;
+  left: calc(50% - 1.5px);
+  top: 50%; bottom: 0;
+  border-left: 3px dashed #9ca3af;
+}
+
+/* ── 並排雙框 ── */
+.dual {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+/* ── MySQL 底欄 ── */
+.mysql-row {
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 2px dashed #cbd5e1;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.mysql-note { font-size: 11.5px; color: #94a3b8; font-style: italic; }
+</style>
+</head>
+<body>
+<div class="outer">
+
+  <div class="diagram-title">系統架構圖</div>
+
+  <div class="cols">
+
+    <!-- ═══ 左欄：離線批次 ═══ -->
+    <div>
+      <div class="sec-label sec-offline">離線批次處理</div>
+
+      <div class="box b-scraper">
+        爬蟲
+        <small>Rakuten・Olive Young・@cosme・화해・PTT・Dcard</small>
+      </div>
+      <div class="vc"><div></div></div>
+
+      <div class="box b-gemini">
+        Gemini API
+        <small>翻譯：日文 / 韓文 → 繁體中文</small>
+      </div>
+      <div class="vc"><div></div></div>
+
+      <div class="box b-mongo">
+        MongoDB
+        <small>商品資料 + 評論語料</small>
+      </div>
+      <div class="vc"><div></div></div>
+
+      <div class="box b-roberta">
+        RoBERTa
+        <small>情感分析 → 好評率回寫 MongoDB</small>
+      </div>
+      <div class="vc"><div></div></div>
+
+      <div class="box b-st">
+        sentence-transformers
+        <small>向量化</small>
+      </div>
+      <div class="vc"><div></div></div>
+
+      <div class="box b-chroma">
+        ChromaDB
+        <small>RAG 向量索引</small>
+      </div>
+    </div>
+
+    <!-- ═══ 中間分隔線 ═══ -->
+    <div class="divider"></div>
+
+    <!-- ═══ 右欄：即時查詢 ═══ -->
+    <div>
+      <div class="sec-label sec-online">即時查詢流程</div>
+
+      <div class="box b-user">使用者 / 前端介面</div>
+      <div class="vc"><div></div></div>
+
+      <div class="box b-api">後端 API（FastAPI）</div>
+      <div class="vc"><div></div></div>
+
+      <div class="box b-mongo">
+        MongoDB
+        <small>① 品類 + 預算篩選，縮小候選商品範圍</small>
+      </div>
+      <div class="vc"><div></div></div>
+
+      <div class="box b-chroma">
+        ChromaDB
+        <small>② 在候選範圍內做語意向量搜尋，依相似度排序</small>
+      </div>
+      <div class="vc"><div></div></div>
+
+      <div class="box b-gemini">
+        Gemini API
+        <small>生成評論摘要與推薦說明</small>
+      </div>
+      <div class="vc"><div></div></div>
+
+      <div class="box b-user">
+        前端介面 → 使用者
+        <small>推薦清單（商品名 + 好評率 + 評論摘要）</small>
+      </div>
+    </div>
+
+  </div><!-- /cols -->
+
+  <!-- ── MySQL 底欄 ── -->
+  <div class="mysql-row">
+    <div class="box b-mysql"
+         style="width:auto; padding:8px 20px; white-space:nowrap; flex-shrink:0;">
+      MySQL
+      <small>使用者帳號管理（會員資料 / JWT Token）</small>
+    </div>
+    <span class="mysql-note">※ 僅用於帳號管理，不進入商品資料流</span>
+  </div>
+
+</div>
+</body>
+</html>
