@@ -531,9 +531,9 @@
 </div>
 
 <footer class="tail">
-  這個頁面呼叫本機 API <code>http://localhost:8000/recommend</code>，
+  雙擊這個檔案打開時會呼叫本機 API <code>http://localhost:8000/recommend</code>，
   伺服器沒開的話請先在 <code>drugstore-demo</code> 資料夾執行
-  <code>python -m uvicorn api.main:app --reload --port 8000</code>
+  <code>python -m uvicorn api.main:app --port 8000</code>（透過網址開啟這頁時會自動改打同網域的 API，不用改設定）
 </footer>
 
 <div class="modal-overlay" id="authModal">
@@ -591,7 +591,10 @@
 </div>
 
 <script>
-const API_BASE = "http://localhost:8000";
+// 直接雙擊這個檔案打開（file:// 開頭）時，沒有伺服器幫忙生網頁，要打本機 API；
+// 如果是被 FastAPI 用網址生出來的（本機 http://localhost:8000/ 或部署到 Render 之後的網址），
+// API 就跟頁面同一個網域，用相對路徑（空字串）就好，不用寫死網址，換部署網址也不用改這裡。
+const API_BASE = location.protocol === "file:" ? "http://localhost:8000" : "";
 
 // 實測過會回傳「商品 + 真實評論」資料最完整的查詢範例
 const SUGGESTED_QUERIES = [

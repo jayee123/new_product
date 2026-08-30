@@ -9,10 +9,12 @@ FastAPI 推薦系統入口
   curl -X POST http://localhost:8000/recommend -H "Content-Type: application/json" ^
        -d "{\"query\": \"乾性肌保濕精華，預算500以內\", \"country\": \"JP\", \"top_k\": 5}"
 """
+import os
 from typing import Optional
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
 
 from api.recommend import recommend, SORT_OPTIONS
@@ -29,14 +31,24 @@ from db.mongo_client import count_summary
 
 app = FastAPI(title="Buy託了AI 推薦 API")
 
-# 前端是本機開的靜態 HTML（file://），瀏覽器會把它當成 null origin，
-# 這裡只是本機demo，不對外開放，直接放行所有來源最簡單。
+# 前端可能是雙擊本機檔案打開（file://，null origin），也可能是被下面這個服務
+# 用網址生出來的（同網域，理論上不需要 CORS），兩種情況都放行最簡單，
+# 反正是展示用途的專題，不是要對外開放的正式服務。
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 讓 FastAPI 直接把前端頁面生出來，部署到 Render 之類的 PaaS 時，
+# 一個網址就同時有前端+後端，不用另外開一個靜態網站服務、也不用處理跨網域問題。
+_FRONTEND_INDEX = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "index.html")
+
+
+@app.get("/")
+def serve_frontend():
+    return FileResponse(_FRONTEND_INDEX)
 
 
 class RecommendRequest(BaseModel):
