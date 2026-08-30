@@ -1,32 +1,37 @@
+# 版本號對齊本機實際安裝、測試過的版本（用 pip show 查證，不是憑印象手寫）
+# 2026-08-30：修正版，原本這份檔案有 12 個套件版本號跟本機實際版本對不起來，
+# 部署到 Render 時 pymysql==1.4.6 這個版本根本不存在（PyPI 最高只到 1.2.0），
+# 才發現整份檔案是舊的，藉這次機會全部校正一次。
+
 # 爬蟲
-requests==2.31.0
+requests==2.32.4
 beautifulsoup4==4.12.3
-playwright==1.44.0
-lxml==5.2.2
+playwright==1.60.0
+lxml==5.3.0
 
 # AI / NLP
-openai==1.35.0
-transformers==4.41.2
-torch==2.3.1
-sentence-transformers==3.0.1
+openai==2.40.0
+transformers==4.44.0
+torch==2.1.2
+sentence-transformers==5.3.0
 
 # RAG 向量資料庫
-chromadb==0.5.3
+chromadb==1.5.5
 
 # MongoDB
-pymongo==4.7.3
+pymongo==4.17.0
 
 # API
 fastapi==0.115.12
 uvicorn==0.34.2
 
 # 會員系統（MySQL）
-pymysql==1.4.6
-bcrypt
+pymysql==1.1.1
+bcrypt==5.0.0
 pyjwt==2.13.0
 
 # 工具
 python-dotenv==1.0.1
-rapidfuzz==3.9.3
-tqdm==4.66.4
-pandas==2.2.2
+rapidfuzz==3.14.5
+tqdm==4.66.5
+pandas==2.2.3
