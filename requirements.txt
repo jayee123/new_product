@@ -10,6 +10,10 @@ playwright==1.60.0
 lxml==5.3.0
 
 # AI / NLP
+# numpy 一定要釘在 <2，torch==2.1.2 是編譯綁定 numpy 1.x ABI 的，
+# 沒釘住的話 pip 會抓到 numpy 2.x，載入時會跳 "_ARRAY_API not found" 警告
+# （這是本機環境踩過的舊坑，見 requirements.txt 沒管到、部署到 Render 才又中一次）。
+numpy==1.26.4
 openai==2.40.0
 transformers==4.44.0
 torch==2.1.2
