@@ -16,4 +16,6 @@ def get_connection():
         charset="utf8mb4",
         cursorclass=pymysql.cursors.DictCursor,
         autocommit=True,
+        # Aiven（雲端 MySQL）強制要求 TLS 連線，本機 MySQL 沒這個要求但加了也不影響。
+        ssl={"ssl": {}},
     )
