@@ -91,6 +91,71 @@ def retranslate_oliveyoung_names():
     print(f"  完成，更新 {updated} 筆商品的 name_zh")
 
 
+def retranslate_rakuten_brand():
+    """
+    Rakuten 的 brand_local 其實是店名（見 scrapers/product_schema.py normalize_rakuten 的註解），
+    brand_zh 一開始就是空字串（不是複製 brand_local），所以用「brand_zh 是空字串」判斷有沒翻過，
+    跟 oliveyoung 用「brand_zh == brand_local」的判斷方式不同。
+    """
+    db = get_db()
+    match = {"source_platform": "rakuten", "brand_local": {"$ne": ""},
+             "$or": [{"brand_zh": ""}, {"brand_zh": None}]}
+    brands = db.products.distinct("brand_local", match)
+    print(f"\n=== rakuten 店名翻譯：{len(brands)} 個不重複店名（跳過已翻譯過的） ===")
+
+    translated_count = 0
+    updated_count = 0
+    for i in range(0, len(brands), BATCH_SIZE):
+        chunk = brands[i:i + BATCH_SIZE]
+        print(f"  翻譯第 {i + 1}-{i + len(chunk)} 筆（共 {len(brands)} 筆）...")
+        try:
+            translated = translate_batch(chunk, note="日本電商店名（樂天市場賣場名稱）")
+        except GeminiError as e:
+            print(f"    [這批失敗，跳過，之後可以重跑腳本補上] {e}")
+            continue
+
+        for orig, zh in zip(chunk, translated):
+            result = db.products.update_many(
+                {"source_platform": "rakuten", "brand_local": orig},
+                {"$set": {"brand_zh": zh}},
+            )
+            updated_count += result.modified_count
+            translated_count += 1
+        time.sleep(SLEEP_BETWEEN_BATCHES)
+
+    print(f"  完成，翻譯了 {translated_count}/{len(brands)} 個店名，更新 {updated_count} 筆商品的 brand_zh")
+
+
+def retranslate_rakuten_names():
+    """
+    Rakuten 商品名稱一樣要逐一翻（跟 oliveyoung 商品名稱一樣沒辦法去重），
+    用「name_zh 是空字串」判斷有沒翻過（Rakuten 的 name_zh 一開始就是空字串，不是複製 name_local）。
+    """
+    db = get_db()
+    products = list(db.products.find(
+        {"source_platform": "rakuten", "$or": [{"name_zh": ""}, {"name_zh": None}]},
+        {"_id": 0, "source_url": 1, "name_local": 1},
+    ))
+    print(f"\n=== rakuten 商品名稱翻譯：{len(products)} 筆（跳過已翻譯過的） ===")
+
+    updated = 0
+    for i in range(0, len(products), BATCH_SIZE):
+        chunk = products[i:i + BATCH_SIZE]
+        names = [p["name_local"] for p in chunk]
+        print(f"  翻譯第 {i + 1}-{i + len(chunk)} 筆（共 {len(products)} 筆）...")
+        try:
+            translated = translate_batch(names, note="日本樂天市場美妝保養商品名稱")
+        except GeminiError as e:
+            print(f"    [失敗，跳過這批] {e}")
+            continue
+        for p, zh in zip(chunk, translated):
+            db.products.update_one({"source_url": p["source_url"]}, {"$set": {"name_zh": zh}})
+            updated += 1
+        time.sleep(SLEEP_BETWEEN_BATCHES)
+
+    print(f"  完成，更新 {updated} 筆商品的 name_zh")
+
+
 if __name__ == "__main__":
     if sys.platform == "win32":
         import io
@@ -100,5 +165,7 @@ if __name__ == "__main__":
     retranslate_oliveyoung_names()
     retranslate_brand("cosme", "日本美妝品牌名稱")
     retranslate_brand("hwahae", "韓國藥妝品牌名稱")
+    retranslate_rakuten_brand()
+    retranslate_rakuten_names()
 
     print("\n全部翻譯完成")

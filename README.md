@@ -145,6 +145,15 @@ rating_platform, review_count_platform, capacity, scraped_at
 - **連線資訊**：都在 `.env` 的 `MYSQL_*` 那幾行，資料庫名稱 `MYSQL_DB=buytuoleai_auth`，是自己在 Aiven 上 `CREATE DATABASE` 建的，免費方案雖然預設只給一個 `defaultdb`，但實測**可以自己額外建資料庫**
 - **權限退化，已知取捨**：本機版原本刻意用一個非 root、只開放單一資料庫權限的帳號連線；Aiven 免費方案目前只給 `avnadmin` 這一個帳號，等於是整個 MySQL 服務的管理者權限，沒辦法比照本機版建一個權限受限的專用帳號。對這個規模的展示型專案風險可接受，但如果之後要正式營運要注意這點
 - **Aiven 強制要求 TLS 連線**，`db/mysql_client.py` 的 `get_connection()` 已加上 `ssl={"ssl": {}}` 參數，本機 MySQL 沒有這個要求但加了不影響
+- **2026-09-13：Aiven 連不上了，已切回本機 XAMPP MySQL 當備用**。當時預留的 fallback 這次真的用上了：
+  `mysql-114a23-jay2004931101-ec0f.d.aivencloud.com` 這個主機名稱 DNS 完全解析不到（其他外部連線，
+  像 MongoDB Atlas，都正常，確認不是本機網路問題，應該是 Aiven 免費方案閒置太久被暫停或服務被刪了）。
+  改用 `C:\xampp\mysql` 的本機 MariaDB 10.4.32，`.env` 的 `MYSQL_*` 已改回本機設定
+  （`127.0.0.1:3306`，`root` 帳號無密碼——這台是個人開發機，風險可接受，正式環境不能這樣設）。
+  `buytuoleai_auth` 資料庫 + `users`/`revoked_tokens`/`search_history` 三張表都是照 `auth/service.py`
+  的 SQL 語法重新反推建的（原本沒有留 schema 建立腳本），完整測過註冊/重複註冊擋掉/登入/查詢紀錄/
+  登出/重複登出擋掉，全部正常。**下次如果要改回 Aiven，先去 Aiven 主控台確認服務有沒有復活，
+  有的話把 `.env` 裡註解掉的那組 Aiven 連線字串換回來就好。**
 - 三張表：`users`（id/email/password_hash/created_at，密碼用 **bcrypt** 雜湊，不是明文）、`revoked_tokens`（存已登出的 JWT jti，讓登出真的有效果，不是只是前端假裝清掉）、`search_history`（見下面 3-1d 節）
 - 邏輯在 `auth/service.py`（`register()`/`login()`/`decode_token()`/`logout()`），API 路由在 `api/main.py` 的 `/auth/register`、`/auth/login`、`/auth/logout`
 - 已經測過完整流程：註冊 → 重複註冊被擋 → 密碼錯誤被擋 → 登入拿到 JWT → 登出 → 同一個 token 再登出一次會被擋（因為已經在 `revoked_tokens` 裡）。搬到 Aiven 後也重新測過一次註冊+登入端到端，成功拿到 JWT。
@@ -251,3 +260,148 @@ Rakuten（1116 筆，佔資料庫最大宗）目前完全沒進到這個比對�
 | **每 3 日自動排程爬蟲**（FR10） | 沒做，實務上很難全自動：Olive Young 容易被擋、Dcard 需要人手動登入 |
 | **NFR1：API 回應時間 < 500ms** | ❌ 實測 3180ms，超標 6 倍，主因是每筆結果對 MongoDB Atlas 多打 3 次查詢 |
 | **排序切換（FR9）** | ✅ 已完成 |
+
+## 9. 2026-09-12 使用者實測回報：評論資料覆蓋率不足 + 排序異常
+
+**2026-09-13 更新：9-1 排序異常已修正**（`api/recommend.py`，改成兩層排序：有社群評論的排前面，
+沒有的用平台星等當次要依據），驗證過防曬乳搜尋案例排序恢復正常。9-2/9-3 評論覆蓋率/擴充爬蟲的部分
+還沒處理，見下面。
+
+用戶實際操作前端時發現：搜尋防曬乳、排序選「好評率高→低」，結果第一名商品顯示的星等卻只有 ★2.4，
+排在後面的反而是 ★4.6、★4.7，看起來像排序整個是亂的；同時發現很多商品（尤其樂天）完全沒有配對到
+社群評論。已經查證過根本原因，記錄如下，**還沒動手修，等下次接手時處理**。
+
+### 9-1. 排序異常：根本原因是「好評率」跟「平台星等」是兩個不同欄位，被使用者混淆
+
+- 排序選單的「好評率高→低」（`sort_by=rating`）排序依據是 `sentiment_pos_rate`
+  （PTT/Dcard 社群評論裡正評/(正評+負評) 的比例，見 `api/recommend.py`），
+  **不是**畫面上商品卡片顯示的 `★ rating_platform`（樂天/OliveYoung/cosme/화해 自己平台頁面上的星等）。
+  這兩個是完全不同的兩組數字，程式邏輯本身沒有錯（`recommend.py` 註解也寫了「跟平台自己的星等評分
+  rating_platform 是兩回事」），但前端沒有把這個差異講清楚，使用者會直覺以為排序是依照畫面上看到的 ★ 數字。
+- 問題出在：**如果一批商品全部都是 `sentiment_pos_rate = None`**（完全沒配對到社群評論，樂天商品常常是這樣，
+  見下面 9-2），排序邏輯會把這些 None 全部當成同一個值（`-1`），排序等於沒作用，結果會維持在
+  「套用排序之前」的原始順序（也就是語意相關度順序），這時候畫面上看到的 ★ 數字就會顯得雜亂無章，
+  讓人誤以為排序壞掉了，其實排序有執行，只是「依據的那個欄位」全部沒資料。
+- **建議修法（還沒做）**：
+  1. 排序邏輯加一個 fallback：`sentiment_pos_rate` 是 None 的商品，改用 `rating_platform` 當次要排序依據，
+     這樣至少視覺上看起來合理
+  2. 前端排序選單文字改清楚一點，例如「好評率高→低（依社群評論，非平台星等）」，避免使用者誤解
+  3. 或者乾脆多加一個新的排序選項「平台星等高→低」，把兩種排序都留給使用者選
+
+### 9-2. 樂天 / Olive Young 社群評論配對率查證（2026-09-12 查資料庫得出）
+
+| 平台 | 商品數 | 配對到至少 1 篇 PTT/Dcard 評論的商品數 | 對應到的評論總篇數 |
+|---|---|---|---|
+| rakuten | 1116 | 48（4.3%） | 73 篇 |
+| oliveyoung | 424 | 10（2.4%） | 15 篇 |
+| cosme | 346 | 31（9.0%） | 44 篇 |
+| hwahae | 87 | 7（8.0%） | 12 篇 |
+
+`reviews` collection 目前**只有** dcard（51 篇）+ ptt（99 篇）＝150 篇，全部是台灣社群論壇貼文，
+**不是**樂天/Olive Young 平台自己使用者寫的評論文字。樂天/Olive Young 商品卡片上顯示的 ★ 星等跟
+「(1,184)」這種評論篇數，只是平台頁面上的**彙總數字**（`rating_platform` / `review_count_platform`），
+資料庫裡完全沒有存這些平台評論的逐篇文字內容。
+
+### 9-3. 查證過爬蟲原始碼：兩個平台都沒有抓過平台自己的評論文字，是否值得擴充爬蟲待確認
+
+- **樂天（`scrapers/rakuten_scraper.py` + `rakuten_scraper/scraper.py`）**：資料來源是官方 **Rakuten Ichiba
+  商品搜尋 API**，這支 API 本身的回應就只有 `reviewAverage`/`reviewCount` 這兩個彙總欄位，
+  **不會**回傳逐篇評論文字。如果要拿到真的評論內文，要另外串樂天獨立的「レビュー検索 API」
+  （同一組 `RAKUTEN_APP_ID`/`RAKUTEN_ACCESS_KEY` 應該可以用，但目前程式完全沒有呼叫這支 API），
+  是一個全新的爬蟲/串接工作，不是修個小 bug 而已。
+- **Olive Young（`scrapers/oliveyoung_scraper.py`，用 Playwright 爬詳細頁）**：目前詳細頁只有抓
+  評分/評論數/成分表，**沒有**進到評論列表分頁去抓文字。技術上詳細頁確實看得到韓文使用者評論，
+  是可以擴充爬蟲去抓，但要注意第 6 節已經記錄過的坑：**Olive Young 容易被 Cloudflare 擋，
+  尤其短時間內開很多次 headless Playwright session**——抓評論等於要對同一頁面多開分頁/多次請求，
+  會提高被擋的風險，需要控制頻率。
+
+### 9-4. 下次接手時要做的事（按這次調查的優先順序）
+
+1. 決定要不要真的去擴充爬蟲抓樂天/Olive Young 平台自己的評論文字（工程量：樂天要串新的 Review API，
+   Olive Young 要擴充 Playwright 抓評論列表分頁 + 控制被擋風險），還是維持現狀只用 PTT/Dcard 配對
+2. 如果決定要擴充，抓回來的評論文字要接上現有的 `nlp/sentiment.py` 情緒分析 + 評論-商品配對流程，
+   格式要跟現有 PTT/Dcard 評論相容，`sentiment_pos_rate`/AI 摘要邏輯才吃得到這批新資料
+3. ~~9-1 那個排序邏輯的 fallback 應該先修掉~~ ✅ 2026-09-13 已修正
+
+## 10. 2026-09-13 樂天評論擴充爬蟲：進行中，**下次先把樂天爬完再做 Olive Young**
+
+對應第 9-3/9-4 節的待辦。實際做下去發現不需要走「樂天 Review API」這條路，
+直接爬樂天自己的評論網頁更簡單可靠，見下面說明。**這是目前唯一在進行中的爬蟲工作，
+下次接手請先看這一節，不要重新規劃。**
+
+### 10-1. 目前進度（隨時可能變動，接手時請先重跑查證指令）
+
+```bash
+python -m scripts._check_progress   # 這支腳本已經刪掉了，要查進度請用下面這段：
+```
+```python
+from db.mongo_client import get_db
+db = get_db()
+print(db.reviews.count_documents({"source": "rakuten"}))  # 樂天評論總數
+print(len(db.reviews.distinct("product_id", {"source": "rakuten"})))  # 已完成商品數
+print(db.products.count_documents({"source_platform": "rakuten", "review_count_platform": {"$gt": 0}}))  # 目標商品總數
+```
+
+**2026-09-13 停止時的數字**：樂天評論 **15,201 則**，已完成 **286 / 1031** 個商品，剩 **745 個**。
+目前抓到的評論 sentiment 全部是 positive（0 negative）——這不是 bug，是因為預設只抓每個商品
+評論頁的第 1~3 頁（見 10-3 為什麼只抓前幾頁），樂天評論頁預設排序是「参考になった順」（最有幫助优先），
+高票評論本來就容易偏正面。**如果之後想要負評也有代表性，可以改成額外多抓一次「評価が低い順」排序
+的前幾頁**，目前這版沒做。
+
+### 10-2. 資料存在哪裡、怎麼用
+
+評論直接寫進跟 PTT/Dcard 評論同一個 `reviews` collection（`source: "rakuten"` 區分來源），
+欄位相容現有的 `api/recommend.py` 邏輯（`product_id`/`sentiment`/`title`/`source`），
+**不用額外改前後端，資料存進去就會自動被現有的好評率排序、AI 摘要邏輯吃到**
+（不過 `ai_summary` 是批次預先生成的欄位，見第 3-4 節，這批新評論還沒有觸發重新生成摘要，
+如果要讓新配對到樂天評論的商品也有 AI 摘要，要重跑 `scripts/generate_review_summaries.py`）。
+
+**情緒判斷用的是評論者自己給的星等**（4~5 星 = positive，1~3 星 = negative），
+**沒有**跑 `nlp/sentiment.py` 的中文情緒模型——那個模型是訓練給中文用的，套在日文評論上不準，
+星等本身就是更直接可信的依據，也省了跑模型的時間。
+
+### 10-3. 怎麼抓到的（給下次接手的技術說明）
+
+- **不是**用官方 Rakuten API，是直接爬樂天自己的評論網頁（`review.rakuten.co.jp`），完全不需要
+  `RAKUTEN_APP_ID`/`RAKUTEN_ACCESS_KEY`（第 9-3 節講的「要另外串 Review API」是想多了，實測直接爬
+  網頁更簡單）
+- 評論網址格式：`https://review.rakuten.co.jp/item/1/<店家數字編號>_<商品編號>/<頁碼>.1/`
+  （例如 `.../item/1/409735_10000000/1.1/`），這組「店家數字編號」沒辦法從我們資料庫既有欄位算出來，
+  要先進商品頁（`source_url`）本身，抓頁面上 `href` 含 `review.rakuten.co.jp/item/` 的連結才拿得到
+- **關鍵限制**：`item.rakuten.co.jp`（樂天個別商品頁）對 headless Playwright 或 `requests`/`curl`
+  會擋（Akamai 只回一個 Reference 錯誤頁，或直接逾時連不上），**但用真正開著的 Chrome（非 headless）
+  就抓得到**——原因不確定，但實測結果就是這樣，不用花時間再驗證這件事
+- 解法：**手動開一個獨立的 Chrome**（不要用你平常在用的那個 profile，開一個乾淨的），指令：
+  ```
+  chrome.exe --remote-debugging-port=9222 --user-data-dir=<任一個暫存資料夾> https://www.rakuten.co.jp/
+  ```
+  等首頁正常載入（不要卡在驗證畫面）之後，這支腳本會用 Playwright 的 `connect_over_cdp()` 連上去，
+  之後全自動操作，不用人再手動點
+- 評論卡片的 HTML 解析邏輯、選好的 CSS selector 都寫在 `scripts/scrape_rakuten_reviews.py` 的
+  `parse_review_card()` 裡，已經測過對 20/20 則評論解析成功，欄位包含：星等、日期、使用者名稱/
+  性別/年齡層、購買規格、評論全文、有幫助票數
+
+### 10-4. 已知不穩定問題：Chrome / CDP 連線會斷
+
+跑到一半 Chrome 會斷線兩次（"Target page, context or browser has been closed"），原因不明確
+（不確定是系統睡眠、Chrome 記憶體問題、還是單純的連線抖動）。**已經加上自動重連邏輯**
+（`scrape_rakuten_reviews.py` 的 `main()`，連續失敗 2 次就重新呼叫 `connect_over_cdp()`），
+但如果 Chrome **整個程式**被關掉（不只是分頁），自動重連也救不回來，要重新照 10-3 的指令
+手動開一個新的 Chrome，再重跑腳本。
+
+**腳本可以安全重跑**：`main()` 裡的 `skip_done=True`（預設）會先查資料庫，跳過已經有評論的商品，
+不會重複抓、不會浪費時間。
+
+### 10-5. 下次接手的具體步驟
+
+1. 確認 XAMPP MySQL 有沒有開（見第 3-1b 節，如果要測會員系統的話；跟樂天爬蟲本身無關）
+2. 照 10-3 的指令開一個新的 Chrome（`--remote-debugging-port=9222`），等首頁載入
+3. `cd new_product && .\venv\Scripts\python.exe -m scripts.scrape_rakuten_reviews`
+   （不用加參數，會自動跳過已完成的 286 個，處理剩下的 745 個）
+4. 這次跑完、確認樂天全部 1031 個商品都處理完之後，**才開始 Olive Young**：
+   - `olive_young_scraper/scraper.py` 目前**只抓商品資料，完全沒有抓評論文字的程式碼**
+     （只抓了評分/評論數/成分表這些彙總欄位，見第 9-3 節）
+   - 要先用同一招（真 Chrome + CDP 連線）去 Olive Young 商品詳細頁找評論區塊的 HTML 結構
+     （這部分完全還沒探索過，跟樂天不一樣，要重新來一次 10-3 那樣的探索過程），
+     再比照 `scripts/scrape_rakuten_reviews.py` 的寫法寫一支新的 `scripts/scrape_oliveyoung_reviews.py`
+   - Olive Young 本身有 Cloudflare 防護（見第 6 節），流程可能會比樂天更容易卡，要有心理準備

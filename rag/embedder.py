@@ -67,6 +67,7 @@ def build_product_index():
             "price":                 p.get("price") if p.get("price") is not None else -1,
             "currency":              p.get("currency", ""),
             "category":              p.get("category", ""),
+            "product_type":          p.get("product_type", ""),
             "source_platform":       p.get("source_platform", ""),
             "rating_platform":       p.get("rating_platform") if p.get("rating_platform") is not None else -1.0,
             "review_count_platform": p.get("review_count_platform") if p.get("review_count_platform") is not None else 0,
@@ -79,10 +80,16 @@ def build_product_index():
 
 # ─── 功能 2：使用者查詢 → 找相關商品 ──────────────────────────────────────
 
-def query_products(user_query: str, top_k: int = 5) -> list[dict]:
+def query_products(user_query: str, top_k: int = 5, product_type: str = None) -> list[dict]:
     """
     使用者輸入需求描述，找最相關商品
     範例：query_products("乾性肌用的保濕精華，預算500以內")
+
+    product_type: 指定的話，直接交給 ChromaDB 的 where 條件做「先篩範圍、再排語意相關度」，
+                  不是撈一批語意相關的候選之後才在 Python 這邊篩掉不符合類型的——
+                  因為統一產品類型分得很細（見 scripts/classify_product_types.py，40+ 種），
+                  冷門類型（例如「精華液」只有 16 件）語意搜尋撈的那一批候選很可能運氣不好一件都沒中，
+                  篩完變 0 筆。先用 where 縮小到該類型的商品，才不會有這個問題。
     """
     model  = get_model()
     chroma = get_chroma()
@@ -93,7 +100,8 @@ def query_products(user_query: str, top_k: int = 5) -> list[dict]:
         return []
 
     q_vec = model.encode([user_query]).tolist()
-    results = col.query(query_embeddings=q_vec, n_results=top_k)
+    where = {"product_type": product_type} if product_type else None
+    results = col.query(query_embeddings=q_vec, n_results=top_k, where=where)
 
     output = []
     for i in range(len(results["ids"][0])):

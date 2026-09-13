@@ -215,10 +215,13 @@
     padding: 24px;
   }
 
-  .search-row { display: flex; gap: 10px; }
+  .search-row { display: flex; gap: 10px; align-items: flex-end; }
+  .search-row .type-field { flex: 1; }
+  .search-row .query-field { flex: 1; }
 
-  #query {
-    flex: 1;
+  #query, #productType {
+    width: 100%;
+    box-sizing: border-box;
     font-size: 16px;
     padding: 14px 16px;
     border: 1.5px solid var(--border);
@@ -227,7 +230,7 @@
     color: var(--ink);
     font-family: inherit;
   }
-  #query:focus { outline: none; border-color: var(--accent); }
+  #query:focus, #productType:focus { outline: none; border-color: var(--accent); }
 
   #searchBtn {
     font-size: 15px;
@@ -384,6 +387,7 @@
   }
   .card .price { font-size: 17px; font-weight: 800; font-family: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace; }
   .card .price-original { font-size: 11.5px; color: var(--ink-faint); margin-top: -4px; }
+  .card .price-note { font-size: 11px; color: var(--ink-faint); margin-top: -2px; }
   .card .rating { font-size: 12.5px; color: var(--warn); font-weight: 700; }
 
   .reviews-block {
@@ -456,7 +460,8 @@
   }
 
   @media (max-width: 560px) {
-    .search-row { flex-direction: column; }
+    .search-row { flex-direction: column; align-items: stretch; }
+    .search-row .type-field { width: 100%; }
     #searchBtn { padding: 12px; }
   }
 </style>
@@ -479,7 +484,15 @@
 
   <div class="search-panel">
     <div class="search-row">
-      <input id="query" type="text" placeholder="例如：乾性肌保濕精華，預算500以內" />
+      <div class="field type-field">
+        <label>① 商品類型</label>
+        <input id="productType" type="text" list="productTypeList" placeholder="輸入或選擇，例如：精華液" autocomplete="off" />
+        <datalist id="productTypeList"></datalist>
+      </div>
+      <div class="field query-field">
+        <label>② 你的需求描述</label>
+        <input id="query" type="text" placeholder="例如：乾性肌保濕精華，預算500以內" />
+      </div>
       <button id="searchBtn" onclick="doSearch()">搜尋</button>
     </div>
 
@@ -500,10 +513,6 @@
         <input id="budget" type="number" placeholder="不限，例如 500" min="0" />
       </div>
       <div class="field">
-        <label>分類關鍵字</label>
-        <input id="category" type="text" placeholder="例如：防曬" />
-      </div>
-      <div class="field">
         <label>回傳筆數</label>
         <select id="topk">
           <option value="6">6</option>
@@ -515,7 +524,7 @@
         <label>排序方式</label>
         <select id="sortBy" onchange="onSortChange()">
           <option value="relevance" selected>相關度</option>
-          <option value="rating">好評率高→低</option>
+          <option value="rating">好評率高→低（依社群評論，非平台星等）</option>
           <option value="price_low">價格低→高</option>
           <option value="price_high">價格高→低</option>
         </select>
@@ -604,6 +613,29 @@ const SUGGESTED_QUERIES = [
   { label: "遮瑕黑眼圈", query: "遮瑕膏黑眼圈", country: "" },
   { label: "眼影腮紅彩妝", query: "眼影腮紅彩妝", country: "" },
 ];
+
+// 商品類型選擇器：從 /product-types 拿乾淨的統一分類清單（見 scripts/classify_product_types.py），
+// 不是四平台原始那個粒度不一致、比對不到就亂篩的 category 欄位。用 datalist 讓使用者打字就能篩選，
+// 但送出前只接受這個 Set 裡真的存在的值（避免使用者亂打字造成篩不到任何商品）。
+let validProductTypes = new Set();
+
+async function loadProductTypes() {
+  try {
+    const resp = await fetch(`${API_BASE}/product-types`);
+    const data = await resp.json();
+    const listEl = document.getElementById("productTypeList");
+    data.product_types.forEach(({ type, count }) => {
+      validProductTypes.add(type);
+      const opt = document.createElement("option");
+      opt.value = type;
+      opt.label = `${type}（${count}）`;
+      listEl.appendChild(opt);
+    });
+  } catch (err) {
+    // 拿不到清單不該讓整個頁面掛掉，使用者只是這個欄位暫時不能用
+    console.error("載入商品類型清單失敗", err);
+  }
+}
 
 function renderSuggestions() {
   const wrap = document.getElementById("suggestions");
@@ -701,12 +733,13 @@ function renderCard(item) {
           <span class="tag similarity">相似度 ${item.similarity}</span>
         </div>
         <div class="name">${escapeHtml(item.name)}</div>
-        <div class="brand">${escapeHtml(item.brand) || "（無品牌資訊）"} · ${escapeHtml(item.category) || "未分類"}</div>
+        <div class="brand">${escapeHtml(item.brand) || "（無品牌資訊）"} · ${escapeHtml(item.product_type) || "未分類"}</div>
         <div class="price-row">
           <span class="price">${priceText}</span>
           <span class="rating">${ratingText}</span>
         </div>
         ${priceOriginalText ? `<div class="price-original">${priceOriginalText}</div>` : ""}
+        <div class="price-note">價格僅供參考</div>
         ${reviewsHtml}
       </div>
     </div>`;
@@ -739,10 +772,17 @@ async function doSearch() {
   };
   const country = document.getElementById("country").value;
   const budget = document.getElementById("budget").value;
-  const category = document.getElementById("category").value.trim();
+  const productType = document.getElementById("productType").value.trim();
   if (country) body.country = country;
   if (budget) body.budget = parseInt(budget, 10);
-  if (category) body.category = category;
+  if (productType) {
+    if (!validProductTypes.has(productType)) {
+      statusBar.className = "error";
+      statusBar.textContent = `「${productType}」不是清單裡的商品類型，請從下拉選單裡選一個，或清空這個欄位`;
+      return;
+    }
+    body.product_type = productType;
+  }
 
   hasSearched = true;
 
@@ -791,6 +831,7 @@ document.getElementById("query").addEventListener("keydown", (e) => {
 });
 
 renderSuggestions();
+loadProductTypes();
 
 // ── 會員系統：登入 / 註冊 / 登出 ──────────────────────────────────
 
@@ -850,7 +891,7 @@ async function openHistoryModal() {
       const tags = [
         h.country ? (h.country === "JP" ? "🇯🇵 日本" : "🇰🇷 韓國") : null,
         h.budget ? `預算 NT$${h.budget}` : null,
-        h.category ? `分類：${h.category}` : null,
+        h.category ? `類型：${h.category}` : null,
       ].filter(Boolean).join(" · ");
       return `<div class="history-item" onclick="rerunHistoryQuery(${JSON.stringify(h.query)}, ${JSON.stringify(h.country || "")})">
                 <div class="history-query">${escapeHtml(h.query)}</div>

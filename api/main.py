@@ -27,7 +27,7 @@ from auth.service import (
     save_search_history,
     get_search_history,
 )
-from db.mongo_client import count_summary
+from db.mongo_client import count_summary, get_db
 
 app = FastAPI(title="Buy託了AI 推薦 API")
 
@@ -55,7 +55,9 @@ class RecommendRequest(BaseModel):
     query: str = Field(..., description="使用者需求描述，例如「乾性肌保濕精華，預算500以內」")
     budget: Optional[int] = Field(None, description="預算上限，單位新台幣（會自動把商品原幣別換算成台幣再比較）")
     country: Optional[str] = Field(None, description='"JP" 或 "KR"，不填代表兩邊都找')
-    category: Optional[str] = Field(None, description="分類關鍵字子字串比對，例如「防曬」")
+    product_type: Optional[str] = Field(
+        None, description='統一產品類型精確比對，值來自 GET /product-types，例如「精華液」「氣墊」'
+    )
     top_k: int = Field(10, ge=1, le=50, description="回傳幾筆")
     sort_by: str = Field(
         "relevance",
@@ -85,6 +87,23 @@ class LoginRequest(BaseModel):
 @app.get("/health")
 def health():
     return {"status": "ok", **count_summary()}
+
+
+@app.get("/product-types")
+def product_types_endpoint():
+    """
+    給前端「商品類型選擇器」用的清單，統一產品類型是 scripts/classify_product_types.py
+    跑出來、寫在每個商品 product_type 欄位的乾淨分類，不是四平台原始那個粒度不一致的 category。
+    """
+    db = get_db()
+    counts = {}
+    for doc in db.products.aggregate([
+        {"$group": {"_id": "$product_type", "count": {"$sum": 1}}},
+    ]):
+        if doc["_id"]:
+            counts[doc["_id"]] = doc["count"]
+    types = sorted(counts.keys(), key=lambda t: (-counts[t], t))
+    return {"product_types": [{"type": t, "count": counts[t]} for t in types]}
 
 
 @app.post("/auth/register")
@@ -120,17 +139,19 @@ def recommend_endpoint(req: RecommendRequest, authorization: str = Header(None))
         query=req.query,
         budget=req.budget,
         country=req.country,
-        category=req.category,
+        product_type=req.product_type,
         top_k=req.top_k,
         sort_by=req.sort_by,
     )
 
     # 有登入的話悄悄記錄這次搜尋，讓「搜尋紀錄只有自己看得到」這件事真的有意義；
     # 沒登入／token 失效都不影響搜尋本身，只是不記錄
+    # 注意：save_search_history() 的 category 參數名稱是舊的，MySQL 資料表欄位也叫 category，
+    # 沒有改名（避免動資料庫 schema），但存進去的值現在是新的 product_type
     user_id = try_get_user_id(authorization)
     if user_id is not None:
         try:
-            save_search_history(user_id, req.query, req.country, req.budget, req.category)
+            save_search_history(user_id, req.query, req.country, req.budget, req.product_type)
         except Exception:
             pass  # 存紀錄失敗不該讓搜尋整個掛掉
 
