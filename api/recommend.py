@@ -111,8 +111,9 @@ def recommend(query: str, budget: int = None, country: str = None,
             {"product_id": source_url},
             {"_id": 0, "title": 1, "sentiment": 1, "source": 1, "source_url": 1},
         ).limit(3))
-        product_doc = db.products.find_one({"source_url": source_url}, {"_id": 0, "ai_summary": 1})
+        product_doc = db.products.find_one({"source_url": source_url}, {"_id": 0, "ai_summary": 1, "complaint_stats": 1})
         ai_summary = (product_doc or {}).get("ai_summary")
+        complaint_stats = (product_doc or {}).get("complaint_stats")
 
         price = c.get("price", -1)
         price = price if price is not None and price >= 0 else None
@@ -147,6 +148,7 @@ def recommend(query: str, budget: int = None, country: str = None,
             "sentiment_pos_rate": sentiment_pos_rate,
             "sample_reviews": sample_reviews,
             "ai_summary": ai_summary,
+            "complaint_stats": complaint_stats,
         })
 
     if sort_by == "rating":

@@ -280,6 +280,15 @@
     color: var(--ink-faint);
   }
 
+  .sort-hint {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+    font-size: 12.5px;
+    color: var(--ink-faint);
+    line-height: 1.5;
+  }
+
   .filters {
     margin-top: 18px;
     padding-top: 18px;
@@ -371,10 +380,9 @@
     font-size: 14.5px;
     font-weight: 700;
     line-height: 1.4;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
+    /* 樂天商品原始標題常常前面塞滿促銷字樣（限時折扣/贈品/免運/官方店名），
+       如果限制顯示行數，常常整段都被促銷字樣占滿、真正描述商品的部分反而被截斷看不到，
+       所以這裡不截斷，把完整名稱顯示出來 */
   }
 
   .card .brand { font-size: 12.5px; color: var(--ink-soft); }
@@ -436,6 +444,25 @@
   .no-reviews { font-size: 12px; color: var(--ink-faint); font-style: italic; }
   .ai-summary-text { font-size: 12.5px; color: var(--ink); line-height: 1.6; margin: 4px 0 6px; }
   .ai-summary-for { font-size: 12px; color: var(--accent-strong); font-weight: 600; margin: 0; }
+
+  .cons-block {
+    margin-top: 10px;
+    padding: 9px 11px;
+    background: var(--warn-soft);
+    border-radius: 8px;
+  }
+  .cons-title { font-size: 12.5px; font-weight: 700; color: var(--warn); }
+  .cons-note { font-size: 10.5px; font-weight: 400; color: var(--ink-faint); margin-left: 4px; }
+  .cons-text { font-size: 12.5px; color: var(--ink); line-height: 1.6; margin: 5px 0 6px; }
+  .cons-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+  .cons-tag {
+    font-size: 11.5px; font-weight: 700; color: var(--warn);
+    background: var(--surface); border-radius: 999px; padding: 2px 9px;
+  }
+  .cons-details { margin-top: 7px; font-size: 11.5px; color: var(--ink-soft); }
+  .cons-details summary { cursor: pointer; color: var(--warn); font-weight: 600; }
+  .cons-quote { margin-top: 5px; line-height: 1.5; }
+  .cons-quote-meta { color: var(--ink-faint); }
 
   #emptyState, #initialState {
     text-align: center;
@@ -522,13 +549,19 @@
       </div>
       <div class="field">
         <label>排序方式</label>
-        <select id="sortBy" onchange="onSortChange()">
+        <select id="sortBy" onchange="onSortChange()" title="好評率排序：有真實社群評論的商品優先，依好評率高→低排；完全沒配對到評論的商品，改依平台星等高→低排在後面">
           <option value="relevance" selected>相關度</option>
-          <option value="rating">好評率高→低（依社群評論，非平台星等）</option>
+          <option value="rating">好評率高→低</option>
           <option value="price_low">價格低→高</option>
           <option value="price_high">價格高→低</option>
         </select>
       </div>
+    </div>
+
+    <div class="sort-hint" id="sortHint" hidden>
+      💡「好評率高→低」排序：有真實社群評論（PTT/Dcard/樂天評論）的商品排在前面，依好評率高→低排；
+      完全沒配對到評論的商品，改用平台自己的星等（★）高→低排在後面——兩種排序依據不一樣，
+      不是同一套標準混著比。
     </div>
 
     <div id="statusBar"></div>
@@ -694,12 +727,36 @@ function renderCard(item) {
       </div>`;
 
     if (item.ai_summary && item.ai_summary.summary) {
+      // 「常見缺點」：統計是程式從原始評論算出來的（每則評論每個面向只算一票，≥2 人提到才列），
+      // 缺點摘要文字只根據這份統計改寫；原文收在「看原文」展開裡，預設不顯示，版面才一致
+      let consHtml = "";
+      const cs = item.complaint_stats;
+      if (cs && cs.aspects && cs.aspects.length > 0) {
+        const tags = cs.aspects.map(a =>
+          `<span class="cons-tag">${escapeHtml(a.aspect)} ×${a.count}</span>`).join("");
+        const quotes = cs.aspects.map(a => {
+          const ev = a.evidence || {};
+          const meta = [ev.source, ev.rating ? `${ev.rating}星` : null,
+                        ev.helpful_count ? `${ev.helpful_count} 人覺得有幫助` : null].filter(Boolean).join("・");
+          return `<div class="cons-quote"><b>${escapeHtml(a.aspect)}</b>：${escapeHtml(ev.text || "")}
+                    <span class="cons-quote-meta">（${escapeHtml(meta)}）</span></div>`;
+        }).join("");
+        consHtml = `
+          <div class="cons-block">
+            <div class="cons-title">⚠ 常見缺點
+              <span class="cons-note">依取樣的 ${cs.n_analyzed} 則評論統計，至少 2 人提到才列出</span></div>
+            ${item.ai_summary.cons ? `<p class="cons-text">${escapeHtml(item.ai_summary.cons)}</p>` : ""}
+            <div class="cons-tags">${tags}</div>
+            <details class="cons-details"><summary>看原文</summary>${quotes}</details>
+          </div>`;
+      }
       // 有 AI 摘要就優先顯示摘要，不要再列一堆評論標題
       reviewsHtml = `
         <div class="reviews-block">
           ${statLine}
           <p class="ai-summary-text">${escapeHtml(item.ai_summary.summary)}</p>
           <p class="ai-summary-for">💡 適合：${escapeHtml(item.ai_summary.suggested_for)}</p>
+          ${consHtml}
         </div>`;
     } else {
       const items = item.sample_reviews.map(r => {
@@ -748,6 +805,8 @@ function renderCard(item) {
 let hasSearched = false;
 
 function onSortChange() {
+  const sortBy = document.getElementById("sortBy").value;
+  document.getElementById("sortHint").hidden = sortBy !== "rating";
   // 排序只有在已經查詢過一次之後改變才需要重新查，避免使用者一進頁面就莫名其妙送出空查詢
   if (hasSearched) doSearch();
 }
@@ -886,18 +945,24 @@ async function openHistoryModal() {
       listEl.innerHTML = `<p class="history-empty">還沒有搜尋紀錄，登入後搜尋會自動記錄在這裡（只有你自己看得到）。</p>`;
       return;
     }
-    listEl.innerHTML = data.history.map(h => {
+    listEl.innerHTML = "";
+    data.history.forEach(h => {
       const when = new Date(h.created_at + "Z").toLocaleString("zh-TW");
       const tags = [
         h.country ? (h.country === "JP" ? "🇯🇵 日本" : "🇰🇷 韓國") : null,
         h.budget ? `預算 NT$${h.budget}` : null,
         h.category ? `類型：${h.category}` : null,
       ].filter(Boolean).join(" · ");
-      return `<div class="history-item" onclick="rerunHistoryQuery(${JSON.stringify(h.query)}, ${JSON.stringify(h.country || "")})">
-                <div class="history-query">${escapeHtml(h.query)}</div>
-                <div class="history-meta">${when}${tags ? " · " + tags : ""}</div>
-              </div>`;
-    }).join("");
+
+      const item = document.createElement("div");
+      item.className = "history-item";
+      item.innerHTML = `<div class="history-query">${escapeHtml(h.query)}</div>
+                <div class="history-meta">${when}${tags ? " · " + tags : ""}</div>`;
+      // 用 JS 綁定事件（不是拼 onclick="..." HTML 屬性字串），避免查詢字串裡如果剛好有引號，
+      // 拼出來的 HTML 屬性會被截斷、整個點擊完全沒反應
+      item.addEventListener("click", () => rerunHistoryQuery(h.query, h.country || "", h.budget || "", h.category || ""));
+      listEl.appendChild(item);
+    });
   } catch (err) {
     listEl.innerHTML = `<p class="history-empty">${escapeHtml(err.message)}</p>`;
   }
@@ -907,9 +972,11 @@ function closeHistoryModal() {
   document.getElementById("historyModal").classList.remove("open");
 }
 
-function rerunHistoryQuery(query, country) {
+function rerunHistoryQuery(query, country, budget, productType) {
   document.getElementById("query").value = query;
   document.getElementById("country").value = country || "";
+  document.getElementById("budget").value = budget || "";
+  document.getElementById("productType").value = productType || "";
   closeHistoryModal();
   doSearch();
 }

@@ -1,25 +1,27 @@
 """
-用 OpenAI gpt-4o-mini 把資料庫裡「所有平台」商品的品牌/名稱原文（日文/韓文）
-翻譯成繁體中文，只翻還沒翻過的（brand_zh / name_zh 是空的、或還跟原文一模一樣）。
+用 Gemini（ai/gemini.py，模型見該檔 GEMINI_MODEL）把資料庫裡「所有平台」商品的
+品牌/名稱原文（日文/韓文）翻譯成繁體中文，只翻還沒翻過的（brand_zh / name_zh 是空的、
+或還跟原文一模一樣）。
 
-執行：python -m scripts.translate_all_openai
+執行：python -m scripts.translate_all_gemini
 
-**硬性預算上限**：累計花費一達到 ai/openai_translate.py 裡設定的 BUDGET_CAP_USD
-（目前是 US$0.5），會立刻停止，不會再送出下一批請求。
+**2026-09-22（new_product-prj 副本）改用 Gemini**：原本 scripts/translate_all_openai.py
+用 OpenAI gpt-4o-mini（有硬性預算上限），這支改呼叫 ai/gemini.py。Gemini 免費額度下沒有
+計費，BUDGET_CAP_USD／已花金額這組介面保留但實際上不會被撞到，真正的限制是 429 速率限制
+（ai/gemini.py 的 _call() 已經處理：抓「Please retry in N秒」精準等到額度視窗重置）。
 
 **可以安全重跑，會自動接續**：
 - 每一批翻完就立刻寫回 MongoDB，不會因為中途停止而遺失已經翻好的部分
 - 判斷「有沒翻過」是看 name_zh/brand_zh 有沒有值、跟原文是否相同，已經翻好的批次
-  重跑這支腳本時會自動跳過，不會重翻、不會重複花錢
-- 每次執行完（不管是正常跑完還是撞到預算上限），都會把最新進度寫進專案根目錄的
-  TRANSLATION_PROGRESS.md，下次要接手可以先看那份文件
+  重跑這支腳本時會自動跳過，不會重翻
+- 每次執行完，都會把最新進度寫進專案根目錄的 TRANSLATION_PROGRESS.md，下次要接手可以先看那份文件
 """
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ai.openai_translate import translate_batch, OpenAIError, BudgetExceeded, get_usage_summary
+from ai.gemini import translate_batch, GeminiError, BudgetExceeded, get_usage_summary
 from db.mongo_client import get_db
 
 BATCH_SIZE = 25
@@ -86,7 +88,7 @@ def translate_platform_brands(platform: str, note: str) -> bool:
             stop_reason = str(e)
             print(f"  [預算上限] {e}")
             return False
-        except OpenAIError as e:
+        except GeminiError as e:
             print(f"    [這批失敗，跳過，之後可以重跑腳本補上] {e}")
             continue
 
@@ -123,7 +125,7 @@ def translate_platform_names(platform: str, note: str) -> bool:
             stop_reason = str(e)
             print(f"  [預算上限] {e}")
             return False
-        except OpenAIError as e:
+        except GeminiError as e:
             print(f"    [失敗，跳過這批] {e}")
             continue
 
@@ -140,32 +142,32 @@ def write_progress_report(completed: bool):
     usage = get_usage_summary()
 
     lines = [
-        "# 翻譯進度報告（OpenAI gpt-4o-mini）",
+        "# 翻譯進度報告（Gemini）",
         "",
         f"最後更新：{datetime.now(timezone.utc).isoformat()}",
         "",
-        f"本次執行花費：US${usage['total_cost_usd']:.4f}"
+        f"本次執行呼叫次數：{usage['total_calls']}"
         f"（input tokens={usage['total_input_tokens']}，"
-        f"output tokens={usage['total_output_tokens']}，呼叫次數={usage['total_calls']}）",
+        f"output tokens={usage['total_output_tokens']}；免費額度沒有計費，花費固定顯示 US$0）",
         "",
     ]
 
     if completed:
         lines.append("**狀態：這一輪所有平台都處理過了，沒有撞到預算上限。**")
         lines.append("")
-        lines.append("如果下面「各平台剩餘未翻譯數量」還有非 0 的項目，代表那些批次呼叫 OpenAI 失敗被跳過了")
-        lines.append("（例如逾時、格式錯誤），直接重跑 `python -m scripts.translate_all_openai` 補翻即可。")
+        lines.append("如果下面「各平台剩餘未翻譯數量」還有非 0 的項目，代表那些批次呼叫 Gemini 失敗被跳過了")
+        lines.append("（例如逾時、格式錯誤），直接重跑 `python -m scripts.translate_all_gemini` 補翻即可。")
     else:
-        lines.append(f"**狀態：因為累計花費撞到預算上限（US${0.5}）中途停止。**")
+        lines.append(f"**狀態：因為累計花費撞到預算上限中途停止。**")
         lines.append("")
         lines.append(f"停止原因：{stop_reason}")
         lines.append("")
         lines.append("## 下次怎麼接著做")
         lines.append("")
-        lines.append("1. 如果要繼續翻，先去 `ai/openai_translate.py` 把 `BUDGET_CAP_USD` 調高")
-        lines.append("2. 直接重新執行：`python -m scripts.translate_all_openai`")
+        lines.append("1. 如果要繼續翻，先去 `ai/gemini.py` 把 `BUDGET_CAP_USD` 調高")
+        lines.append("2. 直接重新執行：`python -m scripts.translate_all_gemini`")
         lines.append("3. 這支腳本判斷「有沒翻過」的方式是看 name_zh/brand_zh 是不是空的或跟原文一樣，")
-        lines.append("   已經翻好的會自動跳過，不會重翻、不會重複花錢，只會接著翻還沒翻的部分")
+        lines.append("   已經翻好的會自動跳過，不會重翻，只會接著翻還沒翻的部分")
 
     lines.append("")
     lines.append("## 各平台剩餘未翻譯數量（跑完這次之後）")
@@ -194,4 +196,4 @@ if __name__ == "__main__":
 
     write_progress_report(completed)
     usage = get_usage_summary()
-    print(f"\n=== 執行結束，本次總花費 US${usage['total_cost_usd']:.4f} ===")
+    print(f"\n=== 執行結束，本次呼叫次數 {usage['total_calls']} ===")

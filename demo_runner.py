@@ -8,7 +8,7 @@ Demo 一鍵執行腳本
 
 執行方式：
   python demo_runner.py
-  python demo_runner.py --with-image-test   # 額外跑 AI 圖片幻覺驗證（會呼叫 OpenAI API，花錢）
+  python demo_runner.py --with-image-test   # 額外跑 AI 圖片幻覺驗證（會呼叫 Gemini API）
 """
 import sys
 import argparse
@@ -36,7 +36,7 @@ def print_step(n: int, title: str):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--with-image-test", action="store_true",
-                         help="額外跑 AI 圖片 URL 幻覺驗證（呼叫 OpenAI API）")
+                         help="額外跑 AI 圖片 URL 幻覺驗證（呼叫 Gemini API）")
     args = parser.parse_args()
 
     print("\n" + "=" * 50)

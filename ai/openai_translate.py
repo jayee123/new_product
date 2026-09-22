@@ -9,6 +9,7 @@ BudgetExceeded，呼叫端（scripts/translate_all_openai.py）接住之後就�
 """
 import json
 import re
+import threading
 import time
 import urllib.request
 import urllib.error
@@ -43,6 +44,18 @@ _total_cost = 0.0
 _total_input_tokens = 0
 _total_output_tokens = 0
 _total_calls = 0
+_lock = threading.Lock()  # 多執行緒同時呼叫時，計費累加要上鎖，不然會漏算
+
+
+def configure_budget(cap_usd: float, already_spent_usd: float = 0.0) -> None:
+    """
+    設定「累計」預算：cap_usd 是整個任務（可能跨很多次執行）的花費上限，already_spent_usd 是前幾次
+    已經花掉的金額（呼叫端從資料庫帳本讀出來）。之後 get_usage_summary()['total_cost_usd'] 就是累計總額。
+    """
+    global BUDGET_CAP_USD, _total_cost
+    with _lock:
+        BUDGET_CAP_USD = cap_usd
+        _total_cost = already_spent_usd
 
 
 def get_usage_summary() -> dict:
@@ -102,10 +115,11 @@ def _call(prompt: str, retries: int = 2) -> str:
             in_tok = usage.get("prompt_tokens", 0)
             out_tok = usage.get("completion_tokens", 0)
             cost = in_tok / 1_000_000 * PRICE_PER_M_INPUT + out_tok / 1_000_000 * PRICE_PER_M_OUTPUT
-            _total_cost += cost
-            _total_input_tokens += in_tok
-            _total_output_tokens += out_tok
-            _total_calls += 1
+            with _lock:
+                _total_cost += cost
+                _total_input_tokens += in_tok
+                _total_output_tokens += out_tok
+                _total_calls += 1
 
             return data["choices"][0]["message"]["content"]
         except urllib.error.HTTPError as e:
@@ -154,3 +168,157 @@ def translate_batch(texts: list, note: str = "商品/品牌名稱") -> list:
     if not isinstance(items, list) or len(items) != len(texts):
         raise OpenAIError(f"OpenAI 回傳格式不對：預期 {len(texts)} 筆，實際 {result!r}")
     return [str(x) for x in items]
+
+
+def classify_sentiments(texts: list) -> list:
+    """
+    逐則判斷評論「文字內容」的整體情緒（完全不看星等）：positive / negative / mixed，模型漏判的那則回傳 None。
+    nlp/sentiment.py 的模型是中文專用，套在日文、韓文評論上不準，所以日韓評論改用 LLM 直接讀原文判斷。
+    """
+    if not texts:
+        return []
+    numbered = "\n".join(f"{i + 1}. {(t or '')[:300].replace(chr(10), ' ')}" for i, t in enumerate(texts))
+    prompt = f"""以下是 {len(texts)} 則美妝商品的使用者評論（原文可能是日文或韓文）。
+請逐則判斷「評論內文」表達的整體情緒，**只看文字內容，不要猜評論者給了幾顆星**：
+- positive：整體滿意、推薦、會回購
+- negative：整體不滿、後悔、不推薦、有明顯負面體驗（過敏、無效、品質差等）
+- mixed：優缺點並陳，或整體偏保留、有明顯抱怨但仍給予部分肯定
+
+回傳一個 JSON 物件，key 是評論編號（字串），value 是情緒，例如：
+{{"1": "positive", "2": "negative", "3": "mixed"}}
+必須包含 1 到 {len(texts)} 每一個編號，不要加任何說明文字。
+
+評論：
+{numbered}"""
+
+    raw = _call(prompt)
+    result = _parse_json_response(raw)
+    if not isinstance(result, dict):
+        raise OpenAIError(f"OpenAI 回傳格式不對：{result!r}")
+    # 改用「編號→情緒」而不是要求陣列剛好 N 筆：gpt-4o-mini 一批 20 則時常常多一筆或少一筆，
+    # 用陣列長度驗證會整批作廢（2026-09-21 實測 40 批全部失敗）。漏掉的編號回傳 None。
+    valid = {"positive", "negative", "mixed"}
+    out = [result.get(str(i)) if result.get(str(i)) in valid else None for i in range(1, len(texts) + 1)]
+    if all(x is None for x in out):
+        raise OpenAIError(f"OpenAI 回傳沒有任何可用標籤：{result!r}")
+    return out
+
+
+# 抱怨面向固定 10 類（2026-09-21 使用者確認）；模型回傳不在清單裡的一律歸「其他」
+COMPLAINT_ASPECTS = ["質地", "顏色／色號", "包裝", "容量", "氣味", "刺激過敏", "保濕／效果", "持妝", "價格", "物流", "其他"]
+# 2026-09-21 健全檢查發現：彩妝的色差、色號不合被硬塞進「質地」，所以在使用者確認的 10 類之外多加「顏色／色號」（共 11 類）
+
+_KANA_HANGUL = re.compile(r"[぀-ヿ가-힯]")  # 日文假名、韓文字母
+
+
+def extract_review_aspects(texts: list) -> list:
+    """
+    逐則評論同時抽出：整體情緒（看文字、不看星等）＋抱怨面向。回傳 list，每則是
+    {"sentiment": "positive|negative|mixed", "complaints": [{"aspect": ..., "detail": ...}]}，
+    模型漏判的那則回傳 None。用「編號→結果」的物件格式，不要求陣列剛好 N 筆
+    （gpt-4o-mini 一批 20 則常多一筆少一筆，用陣列長度驗證會整批作廢）。
+    """
+    if not texts:
+        return []
+    numbered = "\n".join(f"{i + 1}. {(t or '')[:300].replace(chr(10), ' ')}" for i, t in enumerate(texts))
+    aspects = "、".join(COMPLAINT_ASPECTS)
+    prompt = f"""以下是 {len(texts)} 則美妝商品的使用者評論（原文可能是日文、韓文或中文）。
+請逐則只根據「評論文字」（不要猜星等）做兩件事：
+1. sentiment：整體情緒。positive＝整體滿意；negative＝整體不滿、後悔、不推薦；mixed＝優缺點並陳、或有明顯抱怨但仍有肯定
+2. complaints：這則評論提到的缺點或抱怨，每個缺點一筆，含 aspect 與 detail
+   - aspect 只能從這 {len(COMPLAINT_ASPECTS)} 個選一個：{aspects}
+     各面向的意思：質地＝觸感、黏膩、厚重、乾澀、延展性；顏色／色號＝色差、色號不合、顯色度、氧化變色；
+     包裝＝瓶口、幫浦、盒子、開封；容量＝份量太少或太多；氣味＝香味太重或有異味；
+     刺激過敏＝刺痛、泛紅、長痘、過敏；保濕／效果＝保濕不足、沒有效果；持妝＝脫妝、掉色、不持久；
+     價格＝太貴、不划算；物流＝出貨慢、包裹破損
+   - detail：**必須是繁體中文**，15 字內描述具體抱怨，例如「偏黏膩」「瓶口不好擠」「色號偏白」。
+     絕對不可以出現日文假名或韓文字母，原文是日文或韓文請自行翻成中文
+   - 只有真正的缺點或抱怨才算；單純的使用提醒、中性描述、優點都不要放進來
+   - 沒有抱怨就給空陣列
+
+回傳一個 JSON 物件，key 是評論編號（字串），例如：
+{{"1": {{"sentiment": "mixed", "complaints": [{{"aspect": "質地", "detail": "偏黏膩"}}]}}, "2": {{"sentiment": "positive", "complaints": []}}}}
+必須包含 1 到 {len(texts)} 每一個編號，不要加任何說明文字。
+
+評論：
+{numbered}"""
+
+    raw = _call(prompt)
+    result = _parse_json_response(raw)
+    if not isinstance(result, dict):
+        raise OpenAIError(f"OpenAI 回傳格式不對：{result!r}")
+    valid_sent = {"positive", "negative", "mixed"}
+    out = []
+    for i in range(1, len(texts) + 1):
+        item = result.get(str(i))
+        if not isinstance(item, dict) or item.get("sentiment") not in valid_sent:
+            out.append(None)
+            continue
+        complaints = []
+        for c in item.get("complaints") or []:
+            if not isinstance(c, dict):
+                continue
+            aspect = c.get("aspect") if c.get("aspect") in COMPLAINT_ASPECTS else "其他"
+            detail = str(c.get("detail") or "").strip()[:30]
+            if _KANA_HANGUL.search(detail):
+                detail = ""  # 模型沒翻成中文：不顯示那句日韓文，但這則抱怨的面向還是要計入
+            complaints.append({"aspect": aspect, "detail": detail})
+        out.append({"sentiment": item["sentiment"], "complaints": complaints})
+    if all(x is None for x in out):
+        raise OpenAIError(f"OpenAI 回傳沒有任何可用結果：{result!r}")
+    return out
+
+
+def write_cons_summary(product_name: str, brand: str, aspects: list, n_analyzed: int) -> str:
+    """
+    把「常見缺點」寫成 1~2 句繁體中文。**只給它程式算好的統計，不給原始評論**，
+    所以它只能改寫這些事實，沒有空間自己發揮。aspects: [{"aspect","count","details":[...]}]
+    """
+    lines = "\n".join(
+        f"- {a['aspect']}：{a['count']} 則評論提到" + (f"（例如：{'、'.join(a['details'][:3])}）" if a["details"] else "")
+        for a in aspects
+    )
+    prompt = f"""商品「{product_name}」（品牌：{brand}）共分析 {n_analyzed} 則使用者評論，
+統計出下列「至少 2 位不同評論者都提到」的常見缺點：
+{lines}
+
+請用繁體中文寫 1~2 句話的「常見缺點」摘要，語氣客觀、像朋友提醒。
+規則：只能使用上面列出的缺點與次數，不可加入清單以外的內容，不可誇大（不要寫「大量」「普遍」除非次數很高）。
+回傳一個 JSON 物件：{{"cons": "..."}}，不要加任何說明文字。"""
+    raw = _call(prompt)
+    result = _parse_json_response(raw)
+    cons = result.get("cons") if isinstance(result, dict) else None
+    if not cons or not isinstance(cons, str):
+        raise OpenAIError(f"OpenAI 回傳缺 cons 欄位：{result!r}")
+    return cons.strip()
+
+
+def summarize_reviews(product_name: str, brand: str, reviews: list) -> dict:
+    """
+    reviews: [{"title": str, "raw_text": str, "sentiment": "positive"/"negative"}]
+    回傳 {"summary": "...", "suggested_for": "..."}。跟 ai/gemini.py 的同名函式介面一致，
+    這裡是 Gemini key 失效後改用的 OpenAI 版本。
+    """
+    lines = []
+    for r in reviews:
+        mark = "正評" if r.get("sentiment") == "positive" else "負評"
+        text = (r.get("raw_text") or "")[:400]
+        lines.append(f"[{mark}] {r.get('title', '')}\n{text}")
+    review_block = "\n\n".join(lines)
+
+    prompt = f"""你是美妝顧問。以下是商品「{product_name}」（品牌：{brand}）的真實社群評論。
+
+評論內容：
+{review_block}
+
+請完成兩件事，用繁體中文回答：
+1. summary：統整這些評論的重點（優點、缺點、實際使用心得），2-3 句話，語氣自然像朋友推薦，不要條列
+2. suggested_for：一句話建議「什麼樣的人適合用這個」（例如膚質、需求、預算取向），根據評論內容判斷，不要空泛
+
+回傳一個 JSON 物件：{{"summary": "...", "suggested_for": "..."}}，不要加任何說明文字"""
+
+    raw = _call(prompt)
+    result = _parse_json_response(raw)
+    if not isinstance(result, dict) or "summary" not in result or "suggested_for" not in result:
+        raise OpenAIError(f"OpenAI 回傳缺欄位：{result!r}")
+    return result
