@@ -50,6 +50,13 @@ python -c "from rag.embedder import build_product_index; build_product_index()"
 **每次要測試**
 
 ```powershell
+# 1. 先開會員資料庫（XAMPP MySQL）：打開 XAMPP Control Panel 按 MySQL 的 Start，或直接執行
+C:\xampp\mysql_start.bat
+#    沒開的話搜尋還是能用，但「註冊／登入」會失敗，前端跳出
+#    Unexpected token 'I', "Internal S"... is not valid JSON（後端是連不上 MySQL 的 500 錯誤）
+#    （2026-09-13 起 Aiven 雲端 MySQL 連不上，改用本機 XAMPP，見 3-1b 節）
+
+# 2. 啟動網站
 venv\Scripts\activate
 python -m uvicorn api.main:app --port 8000
 ```
