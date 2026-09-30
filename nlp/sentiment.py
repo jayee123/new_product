@@ -1,6 +1,11 @@
 """
-情緒分析模組
-使用 HuggingFace 中文情緒模型（CPU 可跑）
+情緒分析模組（CPU 可跑）
+- 中文（PTT/Dcard）：uer/roberta-base-finetuned-jd-binary-chinese，run_batch 用這個
+- 日文/韓文（樂天/OliveYoung 原文，沒有翻譯）：多語言 XLM-RoBERTa，analyze_batch_multilingual 用這個。
+  中文模型套在日文上實測會把好評判成負評；多語言模型則是套在 PTT 長篇文章上幾乎全判中立，
+  所以兩個模型依來源分開用。
+  多語言模型輸出 positive / neutral / negative 三類，**neutral 一律算負評**（團隊 2026-09-24 決定）。
+  需要 sentencepiece 套件（XLM-R tokenizer）。
 """
 from transformers import pipeline
 from db.mongo_client import get_db
@@ -16,6 +21,34 @@ def get_pipeline():
         print(f"[情緒分析] 載入模型 {MODEL_NAME}（首次需下載 ~400MB）...")
         _pipe = pipeline("text-classification", model=MODEL_NAME, device=-1)  # device=-1 = CPU
     return _pipe
+
+
+# 多語言 XLM-RoBERTa 情緒模型（約 1.1GB）
+MULTILINGUAL_MODEL_NAME = "cardiffnlp/twitter-xlm-roberta-base-sentiment"
+
+_multi_pipe = None
+
+def get_multilingual_pipeline():
+    global _multi_pipe
+    if _multi_pipe is None:
+        print(f"[情緒分析] 載入模型 {MULTILINGUAL_MODEL_NAME}（首次需下載 ~1.1GB）...")
+        _multi_pipe = pipeline("text-classification", model=MULTILINGUAL_MODEL_NAME, device=-1,
+                               truncation=True, max_length=512)
+    return _multi_pipe
+
+
+def to_binary(label: str) -> str:
+    """多語言模型三分類 → 正/負二元：只有 positive 算正評，neutral 跟 negative 都算負評"""
+    return "positive" if label == "positive" else "negative"
+
+
+def analyze_batch_multilingual(texts: list[str], batch_size: int = 16) -> list[dict]:
+    """
+    用多語言模型批次分析
+    回傳：[{"label": "positive"|"neutral"|"negative", "sentiment": "positive"|"negative"}, ...]
+    """
+    results = get_multilingual_pipeline()([(t or "")[:1000] for t in texts], batch_size=batch_size)
+    return [{"label": r["label"].lower(), "sentiment": to_binary(r["label"].lower())} for r in results]
 
 
 def analyze(text: str) -> dict:
@@ -46,7 +79,10 @@ def run_batch(limit: int = 200):
         result = analyze(text)
         db.reviews.update_one(
             {"_id": rev["_id"]},
-            {"$set": {"sentiment": result["sentiment"]}}
+            {"$set": {"sentiment": result["sentiment"],
+                      # /recommend 好評率讀 sentiment_roberta（見 scripts/run_roberta_sentiment.py）
+                      "sentiment_roberta": result["sentiment"],
+                      "sentiment_roberta_raw": "zh_model"}}
         )
         if result["sentiment"] == "positive":
             pos += 1

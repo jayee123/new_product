@@ -18,6 +18,8 @@ openai==2.40.0
 transformers==4.44.0
 torch==2.1.2
 sentence-transformers==5.3.0
+# 多語言 XLM-RoBERTa 情緒模型（nlp/sentiment.py）的 tokenizer 需要
+sentencepiece==0.2.2
 
 # RAG 向量資料庫
 chromadb==1.5.5

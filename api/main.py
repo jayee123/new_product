@@ -60,8 +60,8 @@ class RecommendRequest(BaseModel):
     )
     top_k: int = Field(10, ge=1, le=50, description="回傳幾筆")
     sort_by: str = Field(
-        "relevance",
-        description='排序方式："relevance"（語意相關度，預設）/ "rating"（好評率高→低）/ '
+        "recommended",
+        description='排序方式："recommended"（綜合推薦，預設：有無評論→好評率等級→星等→相關度）/ '
                     '"price_low"（價格低→高）/ "price_high"（價格高→低）',
     )
 

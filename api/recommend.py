@@ -21,7 +21,20 @@ def _price_twd(price, curr):
 # 語意搜尋先撈比較多筆，篩選條件（預算/國家/分類）會刷掉一些，才不會篩到不夠 top_k
 OVERFETCH_MULTIPLIER = 6
 
-SORT_OPTIONS = ("relevance", "rating", "price_low", "price_high")
+SORT_OPTIONS = ("recommended", "price_low", "price_high")
+
+# ── 綜合推薦（sort_by="recommended"）：硬排序，不用權重（2026-09-29 改，數值還在跟團隊討論）──
+# 依序比較，前一個條件一樣才比下一個：
+#   1. 有沒有社群評論（有的在前，沒有的一律排最後）
+#   2. 好評率等級（A > B > C，見 POS_RATE_GRADES）
+#   3. 平台星等（高→低）
+#   4. 相關度（高→低）
+# 好評率跟相關度都是連續小數幾乎不會同分，直接拿來硬排序等於只有第一個條件有作用，
+# 所以好評率先分級，同一級裡面才輪到比星等。
+POS_RATE_GRADES = (0.90, 0.80)   # ≥90% A 級、80~90% B 級、<80% C 級
+MIN_REVIEWS_FOR_TOP_GRADE = 5    # 評論數不到這個數不能進 A 級（避免「1 則好評＝100%」衝到最前面）
+# 綜合推薦要在比 top_k 更大的候選池裡重排，不然只是把最相關的 10 筆換個順序
+RERANK_POOL_MULTIPLIER = 3
 
 
 def _exact_name_matches(query: str, limit: int, product_type: str = None) -> list[dict]:
@@ -56,12 +69,43 @@ def _exact_name_matches(query: str, limit: int, product_type: str = None) -> lis
             "rating_platform":       p.get("rating_platform") if p.get("rating_platform") is not None else -1.0,
             "review_count_platform": p.get("review_count_platform") if p.get("review_count_platform") is not None else 0,
             "similarity":            1.0,  # 精確命中，相關度視為滿分，排序會排在語意搜尋結果前面
+            "_exact":                True,
         })
     return output
 
 
+def _pos_rate_grade(r: dict) -> int:
+    """好評率等級：A=2、B=1、C=0；評論數太少的最高只到 B"""
+    rate = r["sentiment_pos_rate"]
+    grade = sum(rate >= cut for cut in POS_RATE_GRADES)
+    if r["sentiment_positive"] + r["sentiment_negative"] < MIN_REVIEWS_FOR_TOP_GRADE:
+        grade = min(grade, len(POS_RATE_GRADES) - 1)
+    return grade
+
+
+def _recommended_sort_key(r: dict) -> tuple:
+    has_reviews = r["sentiment_pos_rate"] is not None
+    return (
+        has_reviews,
+        _pos_rate_grade(r) if has_reviews else -1,
+        r["rating_platform"] if r["rating_platform"] is not None else -1,
+        r["similarity"] if r["similarity"] is not None else -1,
+    )
+
+
+def _rank_recommended(results: list[dict]) -> list[dict]:
+    """
+    綜合推薦：硬排序（條件順序見檔案開頭 POS_RATE_GRADES 上方的說明）。
+    精確命中商品名稱的排在語意搜尋結果前面（使用者就是在找那個商品），
+    但一般詞（例如「防曬乳」）也會命中一大堆商品，所以精確命中的這批內部一樣照硬排序排。
+    """
+    exact = sorted((r for r in results if r["_exact"]), key=_recommended_sort_key, reverse=True)
+    rest = sorted((r for r in results if not r["_exact"]), key=_recommended_sort_key, reverse=True)
+    return exact + rest
+
+
 def recommend(query: str, budget: int = None, country: str = None,
-               product_type: str = None, top_k: int = 10, sort_by: str = "relevance") -> list[dict]:
+               product_type: str = None, top_k: int = 10, sort_by: str = "recommended") -> list[dict]:
     """
     query:        使用者需求描述（自然語言），例如「乾性肌保濕精華，預算500元台幣以內」
     budget:       預算上限，**單位是新台幣**（會用即時匯率把 JPY/KRW 換算成 TWD 再比較，
@@ -73,10 +117,11 @@ def recommend(query: str, budget: int = None, country: str = None,
                   （scripts/classify_product_types.py）產生的乾淨欄位，前端改成下拉選單，
                   使用者只能選這裡面已經存在的值，不會有比對不到的問題。
     top_k:        回傳幾筆
-    sort_by:      "relevance"（預設，語意相關度）/ "rating"（好評率高→低）/
+    sort_by:      "recommended"（預設，綜合推薦：有無評論→好評率等級→星等→相關度 硬排序）/
                   "price_low"（價格低→高，依台幣）/ "price_high"（價格高→低，依台幣）
     """
-    fetch_limit = top_k * OVERFETCH_MULTIPLIER
+    pool_size = top_k * RERANK_POOL_MULTIPLIER if sort_by == "recommended" else top_k
+    fetch_limit = pool_size * OVERFETCH_MULTIPLIER
     exact_matches = _exact_name_matches(query, limit=fetch_limit, product_type=product_type)
     semantic_matches = query_products(query, top_k=fetch_limit, product_type=product_type)
 
@@ -98,22 +143,39 @@ def recommend(query: str, budget: int = None, country: str = None,
                 continue
         c["_price_twd"] = price_twd
         filtered.append(c)
-        if len(filtered) >= top_k:
+        if len(filtered) >= pool_size:
             break
 
+    # 所有候選商品的好評/負評數、AI 摘要各用「一次」查詢拿回來，不要每個商品各查一次
+    # （候選池是 top_k×3，逐筆查的話雲端 MongoDB 來回次數會很多，搜尋明顯變慢）
     db = get_db()
+    urls = [c["source_url"] for c in filtered]
+    sentiment_counts = {}
+    # 正/負評用 RoBERTa 讀評論文字的結果 sentiment_roberta（scripts/run_roberta_sentiment.py），
+    # 還沒跑過模型的評論（例如新爬的）先退回舊的 sentiment（樂天/OliveYoung 是星等 ≥4 換算）
+    for row in db.reviews.aggregate([
+        {"$match": {"product_id": {"$in": urls}}},
+        {"$project": {"product_id": 1, "s": {"$ifNull": ["$sentiment_roberta", "$sentiment"]}}},
+        {"$match": {"s": {"$in": ["positive", "negative"]}}},
+        {"$group": {"_id": {"p": "$product_id", "s": "$s"}, "n": {"$sum": 1}}},
+    ]):
+        sentiment_counts[(row["_id"]["p"], row["_id"]["s"])] = row["n"]
+    product_docs = {
+        d["source_url"]: d
+        for d in db.products.find(
+            {"source_url": {"$in": urls}},
+            {"_id": 0, "source_url": 1, "ai_summary": 1, "complaint_stats": 1},
+        )
+    }
+
     results = []
     for c in filtered:
         source_url = c["source_url"]
-        pos = db.reviews.count_documents({"product_id": source_url, "sentiment": "positive"})
-        neg = db.reviews.count_documents({"product_id": source_url, "sentiment": "negative"})
-        sample_reviews = list(db.reviews.find(
-            {"product_id": source_url},
-            {"_id": 0, "title": 1, "sentiment": 1, "source": 1, "source_url": 1},
-        ).limit(3))
-        product_doc = db.products.find_one({"source_url": source_url}, {"_id": 0, "ai_summary": 1, "complaint_stats": 1})
-        ai_summary = (product_doc or {}).get("ai_summary")
-        complaint_stats = (product_doc or {}).get("complaint_stats")
+        pos = sentiment_counts.get((source_url, "positive"), 0)
+        neg = sentiment_counts.get((source_url, "negative"), 0)
+        product_doc = product_docs.get(source_url, {})
+        ai_summary = product_doc.get("ai_summary")
+        complaint_stats = product_doc.get("complaint_stats")
 
         price = c.get("price", -1)
         price = price if price is not None and price >= 0 else None
@@ -124,7 +186,7 @@ def recommend(query: str, budget: int = None, country: str = None,
         if rating is not None and rating >= 0 and c.get("source_platform") == "cosme":
             rating = round(rating / 7 * 5, 2)
         review_count = c.get("review_count_platform", 0)
-        # 好評率＝正評數÷總評論數（企劃書定義的客觀好評率，跟平台自己的星等評分 rating_platform 是兩回事）
+        # 好評率＝正評數÷總評論數（正/負由 RoBERTa 讀評論文字判斷，中立算負評；跟平台星等 rating_platform 是兩回事）
         sentiment_pos_rate = round(pos / (pos + neg), 4) if (pos + neg) > 0 else None
 
         results.append({
@@ -146,30 +208,18 @@ def recommend(query: str, budget: int = None, country: str = None,
             "sentiment_positive": pos,
             "sentiment_negative": neg,
             "sentiment_pos_rate": sentiment_pos_rate,
-            "sample_reviews": sample_reviews,
             "ai_summary": ai_summary,
             "complaint_stats": complaint_stats,
+            "_exact": c.get("_exact", False),
         })
 
-    if sort_by == "rating":
-        # 2026-09-13 修正：sentiment_pos_rate（社群評論好評率）是 None 的商品，舊版全部併成同一個
-        # sentinel（-1），排序對這批完全沒作用，會維持語意相關度的原始順序——如果使用者搜到的一批
-        # 商品剛好全部都沒配對到社群評論（樂天很常見），畫面上看起來就會像「排序是亂的」（例如
-        # ★2.4 排在 ★4.6 前面），使用者搞不清楚是排序壞了。
-        # 修法：分兩層排序。有 sentiment_pos_rate 的一律排在沒有的前面（社群評論是比較可信的依據），
-        # 同一層內部再依「好評率高→低」或「平台星等高→低」排，沒資料時至少不會顯得雜亂無章。
-        results.sort(
-            key=lambda r: (
-                r["sentiment_pos_rate"] is not None,
-                r["sentiment_pos_rate"] if r["sentiment_pos_rate"] is not None else 0,
-                r["rating_platform"] if r["rating_platform"] is not None else 0,
-            ),
-            reverse=True,
-        )
+    if sort_by == "recommended":
+        results = _rank_recommended(results)[:top_k]
     elif sort_by == "price_low":
         results.sort(key=lambda r: r["price_twd"] if r["price_twd"] is not None else float("inf"))
     elif sort_by == "price_high":
         results.sort(key=lambda r: r["price_twd"] if r["price_twd"] is not None else -1, reverse=True)
-    # sort_by == "relevance"（預設）：維持 ChromaDB 依相似度回傳的順序，不用再排一次
 
+    for r in results:
+        r.pop("_exact", None)
     return results

@@ -280,15 +280,6 @@
     color: var(--ink-faint);
   }
 
-  .sort-hint {
-    margin-top: 10px;
-    padding-top: 10px;
-    border-top: 1px solid var(--border);
-    font-size: 12.5px;
-    color: var(--ink-faint);
-    line-height: 1.5;
-  }
-
   .filters {
     margin-top: 18px;
     padding-top: 18px;
@@ -422,25 +413,6 @@
   .sentiment-pill.pos { background: var(--accent-soft); color: var(--accent-strong); }
   .sentiment-pill.neg { background: var(--coral-soft); color: var(--coral); }
 
-  .review-item {
-    font-size: 12px;
-    color: var(--ink-soft);
-    padding: 4px 0;
-    display: flex;
-    gap: 6px;
-  }
-  .review-item .src {
-    flex: none;
-    font-size: 10.5px;
-    font-weight: 700;
-    padding: 0 5px;
-    border-radius: 4px;
-    background: var(--surface-2);
-    color: var(--ink-faint);
-    height: fit-content;
-  }
-  .review-item .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
   .no-reviews { font-size: 12px; color: var(--ink-faint); font-style: italic; }
   .ai-summary-text { font-size: 12.5px; color: var(--ink); line-height: 1.6; margin: 4px 0 6px; }
   .ai-summary-for { font-size: 12px; color: var(--accent-strong); font-weight: 600; margin: 0; }
@@ -549,19 +521,12 @@
       </div>
       <div class="field">
         <label>排序方式</label>
-        <select id="sortBy" onchange="onSortChange()" title="好評率排序：有真實社群評論的商品優先，依好評率高→低排；完全沒配對到評論的商品，改依平台星等高→低排在後面">
-          <option value="relevance" selected>相關度</option>
-          <option value="rating">好評率高→低</option>
+        <select id="sortBy" onchange="onSortChange()">
+          <option value="recommended" selected>綜合推薦</option>
           <option value="price_low">價格低→高</option>
           <option value="price_high">價格高→低</option>
         </select>
       </div>
-    </div>
-
-    <div class="sort-hint" id="sortHint" hidden>
-      💡「好評率高→低」排序：有真實社群評論（PTT/Dcard/樂天評論）的商品排在前面，依好評率高→低排；
-      完全沒配對到評論的商品，改用平台自己的星等（★）高→低排在後面——兩種排序依據不一樣，
-      不是同一套標準混著比。
     </div>
 
     <div id="statusBar"></div>
@@ -759,17 +724,9 @@ function renderCard(item) {
           ${consHtml}
         </div>`;
     } else {
-      const items = item.sample_reviews.map(r => {
-        const mark = r.sentiment === "positive" ? "👍" : "👎";
-        return `<div class="review-item">
-                  <span class="src">${escapeHtml(r.source)}</span>
-                  <span class="title">${mark} ${escapeHtml(r.title)}</span>
-                </div>`;
-      }).join("");
       reviewsHtml = `
         <div class="reviews-block">
           ${statLine}
-          ${items}
         </div>`;
     }
   } else {
@@ -805,8 +762,6 @@ function renderCard(item) {
 let hasSearched = false;
 
 function onSortChange() {
-  const sortBy = document.getElementById("sortBy").value;
-  document.getElementById("sortHint").hidden = sortBy !== "rating";
   // 排序只有在已經查詢過一次之後改變才需要重新查，避免使用者一進頁面就莫名其妙送出空查詢
   if (hasSearched) doSearch();
 }

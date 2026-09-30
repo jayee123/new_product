@@ -19,11 +19,62 @@ pip install -r requirements.txt
 
 **如果還要跑爬蟲（`scrapers/oliveyoung_scraper.py` 等）**，另外要執行 `playwright install` 下載瀏覽器二進位檔，**再多佔約 1.4 GB**——只是要測試 API/Demo 的話**不需要做這一步**。
 
-複製 `.env.example` 改名成 `.env`，填入需要的 API key（MongoDB／Gemini／MySQL，跟我要或參考下面說明），啟動指令：
+## ▶ 怎麼把網站跑起來（Windows PowerShell，照順序打）
+
+需要 **Python 3.11**（`python --version` 確認）。以下指令都在 repo 根目錄執行。
+
+**第一次（只要做一次）**
+
+```powershell
+# 1. 下載專案
+git clone https://github.com/jayee123/new_product.git
+cd new_product
+
+# 2. 建虛擬環境並啟用（之後每次開新的終端機都要重新啟用，看到最前面有 (venv) 就對了）
+python -m venv venv
+venv\Scripts\activate
+
+# 3. 安裝套件（約 1.5～2 GB，要等幾分鐘）
+pip install -r requirements.txt
+
+# 4. 建立設定檔，用記事本打開填入金鑰（MONGO_URI、MONGO_DB、MYSQL_*、JWT_SECRET、GEMINI_API_KEY，跟組員要）
+copy .env.example .env
+notepad .env
+
+# 5. 建立商品向量索引 chroma_db（沒進版控，第一次一定要建；第一次會下載 embedding 模型 ~120MB）
+python -c "from rag.embedder import build_product_index; build_product_index()"
 ```
+
+> ⚠ 第 5 步不要用 `python -m rag.embedder`，那支除了建索引還會跑「評論配對」，會改到資料庫。
+
+**每次要測試**
+
+```powershell
+venv\Scripts\activate
 python -m uvicorn api.main:app --port 8000
 ```
-瀏覽器打開 `http://localhost:8000/` 即可測試。
+
+看到 `Uvicorn running on http://127.0.0.1:8000` 後，用瀏覽器打開 **http://localhost:8000/**。
+第一次搜尋會比較慢（約 15～20 秒，在載入模型），之後每次搜尋不到 1 秒。
+
+- **關掉**：在跑 uvicorn 的終端機按 `Ctrl + C`
+- **改了 `api/` 底下的程式**：要按 `Ctrl + C` 關掉再重新啟動才會生效（這台機器上 `--reload` 不可靠，不要用）
+- **出現 `address already in use` / port 8000 被佔用**：代表已經有一個在跑，直接開瀏覽器就好；或先找出來關掉：
+  ```powershell
+  netstat -ano | findstr :8000        # 最後一欄是 PID
+  taskkill /PID <上面的PID> /F
+  ```
+
+**有新爬的評論時（選用）**：樂天/Olive Young 新評論要跑 RoBERTa 判斷正負評，好評率才會用文字判斷（只會跑還沒跑過的，CPU 約每秒 5～8 則，第一次會下載模型 ~1.1GB）：
+```powershell
+python -m scripts.run_roberta_sentiment
+```
+
+**手動測試可以看的地方**（排序規則見第 11 節）
+- 排序預設是「綜合推薦」：有社群評論的在前 → 好評率等級（≥90% A、80~90% B、<80% C）→ 平台星等 → 相關度
+- 商品類型選「化妝水」、需求打「保濕」：前面都是 A 級，同一級裡照星等高→低
+- 需求打「乾性肌保濕精華」：沒有社群評論的商品會排在最後面；評論少於 5 則的就算 100% 也只算 B 級
+- 排序改成「價格低→高 / 高→低」：依台幣價格排
 
 ---
 
@@ -130,7 +181,7 @@ rating_platform, review_count_platform, capacity, scraped_at
   {"query": "乾性肌保濕精華，預算500以內", "budget": 500, "country": "JP", "category": "精華", "top_k": 10}
   ```
   `query` 必填，其他都選填。`budget` 是跟商品原幣別比較（不做匯率換算，JP 商品用 JPY、KR 商品用 KRW），`country` 是 `"JP"`/`"KR"`。已測試過語意搜尋 + 篩選都正確（country=KR + budget≤20000 只會回傳符合的商品）。
-- 每筆結果除了商品資料，還會帶 `sample_reviews`（最多 3 篇實際配對到的評論標題/來源/情緒）+ `sentiment_positive`/`sentiment_negative` 好評壞評數，商品跟評論資料是一起回傳的，不是只有數字。
+- 每筆結果除了商品資料，還會帶 `sentiment_positive`/`sentiment_negative` 好評壞評數、`ai_summary`（AI 評論摘要）跟 `complaint_stats`（常見缺點統計）。
 - API 沒有設定成開機自動啟動，**每次要用都要手動下指令重開**，伺服器不會自己一直開著（這是預期行為，不是壞掉）。
 - **`--reload` 在這台機器上不可靠**：保險做法是**改完 `api/` 底下的檔案，一律整個關掉背景的 uvicorn process 再重新啟動**，不要依賴 `--reload` 自動生效，啟動指令不用加 `--reload`：`python -m uvicorn api.main:app --port 8000`。
 - `/recommend` 支援 `sort_by` 參數：`"relevance"`（預設，語意相關度）/ `"rating"`（好評率高→低）/ `"price_low"` / `"price_high"`。好評率＝`sentiment_positive/(sentiment_positive+sentiment_negative)`，回應裡是 `sentiment_pos_rate` 欄位（0~1 之間，沒有配對到評論的商品是 `None`，排序時會排最後面，不會因為「沒負評」誤判成最高好評率）。
@@ -591,3 +642,56 @@ python -m scripts.generate_review_summaries
 - **每爬完一批（不管有沒有全部抓完），都跑一次 `python -m scripts.generate_review_summaries`
   補上新配對到評論的商品的 AI 摘要**（見 10-4b）
 - 兩個爬蟲可以同時跑（用不同的 Chrome / port），但都會寫 MongoDB，Atlas 連線不穩時可能互相拖慢
+
+## 11. 2026-09-24 綜合推薦排序 + RoBERTa 讀文字判斷正負評（已完成，47,290 則全部跑完）
+
+### 11-1. 已完成：排序改成「綜合推薦」（`api/recommend.py`）
+
+- 排序選項只剩 `recommended`（預設）/ `price_low` / `price_high`，**舊的 `relevance`、`rating` 已移除**（API 會回 422）。前端下拉選單、`api/main.py` 預設值都已同步。
+- **2026-09-29 改成硬排序（不用權重）**，依序比較，前一個一樣才比下一個：
+  1. 有沒有社群評論（沒有的一律排最後）
+  2. 好評率等級：≥90% A、80~90% B、<80% C（`POS_RATE_GRADES`）；評論數 < 5 則最高只到 B（`MIN_REVIEWS_FOR_TOP_GRADE`）
+  3. 平台星等 高→低
+  4. 相關度 高→低
+  - 好評率先分級，是因為連續小數幾乎不會同分，直接硬排序的話後面的條件永遠輪不到
+  - 商品名稱精確命中的排在語意結果前面，但精確命中那批內部一樣照上面規則排
+  - 不設相關度門檻；候選池 = `top_k × RERANK_POOL_MULTIPLIER(3)`，排完再取前 top_k
+  - （09-24 第一版是加權分數 0.3×相關度＋0.7×口碑，已被取代）
+- 資料庫查詢改成批次：好評/負評數一次 aggregate、AI 摘要一次 `$in`，不再逐筆查（實測每次搜尋 < 1 秒）
+- 拿掉 `sample_reviews`（每個商品 3 則評論），前端沒有 AI 摘要時只顯示「評論配對 N 篇・好評率・正/負」
+
+### 11-2. 硬排序版本待討論的點（等開會）
+
+- 好評率分級的分界（90% / 80%）、評論數門檻（5 則）
+- 同一級裡面好評率高低不再比：例如「化妝水＋保濕」Dress Snow 好評率 97% 排在 ETUDE 92% 後面，因為兩個都是 A 級、ETUDE 星等較高
+- 相關度排在最後，實際上幾乎不影響排序
+- 平台星等沒有考慮評分人數（117 人跟 3,961 人評分一樣看待）
+
+### 11-3. RoBERTa 讀評論文字判斷正/負評（2026-09-24 全部跑完）
+
+**團隊決定**：好評率要用 RoBERTa 讀評論**文字**判斷，不是星等；**模型判「中立」一律算負評**。
+
+- 評論沒有中文翻譯（`raw_text` 是日韓原文，翻譯腳本只翻商品名/品牌），原本的中文 RoBERTa 看不懂日文（實測把「推薦！」判成負評），所以日韓文改用多語言 **`cardiffnlp/twitter-xlm-roberta-base-sentiment`**（需要 `sentencepiece`，已加進 requirements.txt）
+- PTT/Dcard 是中文長文，多語言模型實測 99 則有 95 則判中立，所以**PTT/Dcard 沿用原本中文 RoBERTa 的結果**
+- 寫到 reviews 新欄位（原本 `sentiment` 不動）：
+  - `sentiment_roberta_raw`：`positive` / `neutral` / `negative`（PTT/Dcard 記成 `zh_model`）
+  - `sentiment_roberta`：二元結果，`/recommend` 好評率讀這個；**還沒跑到的評論會退回舊的 `sentiment`（星等換算）**
+  - 要改中立算法不用重跑模型，用 `sentiment_roberta_raw` 重算 `sentiment_roberta` 即可
+- 程式：`nlp/sentiment.py`（新增 `analyze_batch_multilingual`，中文 `run_batch` 保留原模型）、`scripts/run_roberta_sentiment.py`
+
+**跑完的結果**（47,290 則全部有 `sentiment_roberta`）：
+
+| 來源 | 正 / 中立 / 負 | 好評率：舊（星等 ≥4）→ 新（RoBERTa，中立算負評） |
+|---|---|---|
+| 樂天 | 27,526 / 1,398 / 1,881 | 98.4% → 89.4% |
+| Olive Young | 11,320 / 1,311 / 3,704 | 72.5% → 69.3% |
+| PTT / Dcard | 沿用中文模型 | 不變（90.9% / 82.4%） |
+
+之後新爬的樂天/Olive Young 評論要再跑一次 `python -m scripts.run_roberta_sentiment`（只會跑還沒跑過的），
+沒跑之前 `/recommend` 會先用星等換算的 `sentiment`。CPU 實測約每秒 5~8 則。
+在 Claude Code 裡跑長時間任務要用獨立程序（PowerShell `Start-Process`），綁在對話上的背景指令會在視窗關掉時一起被砍。
+
+查進度：
+```
+python -c "from db.mongo_client import get_db; print(get_db().reviews.count_documents({'sentiment_roberta_raw': {chr(36) + 'exists': True}}), '/ 47290')"
+```
