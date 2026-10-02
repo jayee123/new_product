@@ -431,10 +431,6 @@
     font-size: 11.5px; font-weight: 700; color: var(--warn);
     background: var(--surface); border-radius: 999px; padding: 2px 9px;
   }
-  .cons-details { margin-top: 7px; font-size: 11.5px; color: var(--ink-soft); }
-  .cons-details summary { cursor: pointer; color: var(--warn); font-weight: 600; }
-  .cons-quote { margin-top: 5px; line-height: 1.5; }
-  .cons-quote-meta { color: var(--ink-faint); }
 
   #emptyState, #initialState {
     text-align: center;
@@ -693,26 +689,18 @@ function renderCard(item) {
 
     if (item.ai_summary && item.ai_summary.summary) {
       // 「常見缺點」：統計是程式從原始評論算出來的（每則評論每個面向只算一票，≥2 人提到才列），
-      // 缺點摘要文字只根據這份統計改寫；原文收在「看原文」展開裡，預設不顯示，版面才一致
+      // 缺點摘要文字只根據這份統計改寫；只顯示摘要＋面向標籤，不顯示評論原文（2026-09-30 使用者決定拿掉「看原文」）
       let consHtml = "";
       const cs = item.complaint_stats;
       if (cs && cs.aspects && cs.aspects.length > 0) {
         const tags = cs.aspects.map(a =>
           `<span class="cons-tag">${escapeHtml(a.aspect)} ×${a.count}</span>`).join("");
-        const quotes = cs.aspects.map(a => {
-          const ev = a.evidence || {};
-          const meta = [ev.source, ev.rating ? `${ev.rating}星` : null,
-                        ev.helpful_count ? `${ev.helpful_count} 人覺得有幫助` : null].filter(Boolean).join("・");
-          return `<div class="cons-quote"><b>${escapeHtml(a.aspect)}</b>：${escapeHtml(ev.text || "")}
-                    <span class="cons-quote-meta">（${escapeHtml(meta)}）</span></div>`;
-        }).join("");
         consHtml = `
           <div class="cons-block">
             <div class="cons-title">⚠ 常見缺點
               <span class="cons-note">依取樣的 ${cs.n_analyzed} 則評論統計，至少 2 人提到才列出</span></div>
             ${item.ai_summary.cons ? `<p class="cons-text">${escapeHtml(item.ai_summary.cons)}</p>` : ""}
             <div class="cons-tags">${tags}</div>
-            <details class="cons-details"><summary>看原文</summary>${quotes}</details>
           </div>`;
       }
       // 有 AI 摘要就優先顯示摘要，不要再列一堆評論標題

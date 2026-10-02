@@ -83,6 +83,53 @@ python -m scripts.run_roberta_sentiment
 - 需求打「乾性肌保濕精華」：沒有社群評論的商品會排在最後面；評論少於 5 則的就算 100% 也只算 B 級
 - 排序改成「價格低→高 / 高→低」：依台幣價格排
 
+## ▶ 搬到另一台 server，用 ngrok 給別人連
+
+要搬的東西有 4 樣，**只有程式碼在 GitHub 上**，其他 3 樣要自己處理：
+
+| 東西 | 在哪裡 | 怎麼搬 |
+|---|---|---|
+| 程式碼 | GitHub | `git clone` |
+| `.env`（金鑰、密碼） | 原本那台電腦的 repo 根目錄 | **自己複製檔案過去**（隨身碟／雲端硬碟），**絕對不要推上 GitHub** |
+| 會員資料庫（MySQL） | 原本那台的 XAMPP | 原本那台匯出成 `buytuoleai_auth.sql`，到 server 匯入 |
+| 商品向量索引 `chroma_db` | 沒進版控 | 到 server 重建（指令見上面第一次第 5 步） |
+
+商品／評論資料在雲端 MongoDB Atlas，**不用搬**。但要去 Atlas 的 **Network Access** 確認有允許 server 的 IP（或已設 `0.0.0.0/0`），不然 server 連不到資料庫。
+
+**在原本那台電腦（匯出會員資料庫）**
+```powershell
+# MySQL 要先開著；-u 後面換成 .env 裡的 MYSQL_USER，有密碼的話加 -p
+C:\xampp\mysql\bin\mysqldump.exe -u root --databases buytuoleai_auth --result-file buytuoleai_auth.sql
+```
+
+**在 server 上（Windows，照順序）**
+```powershell
+# 1. 下載程式碼（目前最新的在 ranking-roberta-sentiment 分支）
+git clone -b ranking-roberta-sentiment https://github.com/jayee123/new_product.git
+cd new_product
+
+# 2. 把 .env 複製到這個資料夾（new_product\.env）
+
+# 3. 安裝 XAMPP（https://www.apachefriends.org/），開 XAMPP Control Panel 按 MySQL 的 Start，再匯入會員資料庫
+C:\xampp\mysql\bin\mysql.exe -u root < buytuoleai_auth.sql
+#    注意 .env 的 MYSQL_PORT 要跟 server 上 MySQL 的 port 一樣（XAMPP 預設 3306）
+
+# 4. 照上面「第一次」的第 2、3、5 步：建 venv、pip install、建 chroma_db
+
+# 5. 啟動網站
+venv\Scripts\activate
+python -m uvicorn api.main:app --port 8000
+
+# 6. 另開一個終端機，用 ngrok 公開（第一次要先到 https://dashboard.ngrok.com 註冊，複製 authtoken）
+ngrok config add-authtoken <你的authtoken>
+ngrok http 8000
+```
+ngrok 畫面上 `Forwarding` 那行的 `https://xxxx.ngrok-free.app` 就是給別人連的網址。
+
+- **網站（uvicorn）、MySQL、ngrok 三個都要一直開著**，任何一個關掉，網址就連不到或註冊／登入會壞
+- 免費版 ngrok **每次重開網址都會變**，要重新把新網址給別人；第一次打開會有一頁 ngrok 的警告頁，按「Visit Site」就好
+- server 若是 Linux：步驟一樣，差別是 `source venv/bin/activate`、MySQL 用 `sudo apt install mysql-server`、匯入用 `mysql -u root -p < buytuoleai_auth.sql`
+
 ---
 
 # Buy託了AI 專案進度總表
