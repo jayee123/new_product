@@ -83,6 +83,12 @@ python -m scripts.run_roberta_sentiment
 - 需求打「乾性肌保濕精華」：沒有社群評論的商品會排在最後面；評論少於 5 則的就算 100% 也只算 B 級
 - 排序改成「價格低→高 / 高→低」：依台幣價格排
 
+## ▶ 在這台電腦開 ngrok 給別人連（一鍵）
+
+對 repo 根目錄的 **`start_ngrok.bat` 點兩下**，會自動開 MySQL、網站、ngrok 三個視窗（已經在跑的會跳過）。
+公開網址在「ngrok - KEEP OPEN」視窗的 `Forwarding` 那行，或瀏覽器開 http://127.0.0.1:4040 也看得到。
+三個視窗都不要關，電腦不能睡眠。第一次用要先設定 ngrok 金鑰：`ngrok config add-authtoken <金鑰>`（設一次就好）；ngrok 版本太舊會被拒絕連線，執行 `ngrok update` 更新。
+
 ## ▶ 搬到另一台 server，用 ngrok 給別人連
 
 要搬的東西有 4 樣，**只有程式碼在 GitHub 上**，其他 3 樣要自己處理：
@@ -749,3 +755,64 @@ python -m scripts.generate_review_summaries
 ```
 python -c "from db.mongo_client import get_db; print(get_db().reviews.count_documents({'sentiment_roberta_raw': {chr(36) + 'exists': True}}), '/ 47290')"
 ```
+
+## 12. 2026-10-02 組員「待改善.docx」8 點修正 + 品質檢查
+
+### 12-1. 怎麼量：`scripts/quality_check.py`（只讀，不改資料）
+
+8 個問題各一項檢查，**每項從相關母體隨機抽 200 筆，不到 200 就全部**，每次執行重新抽樣，結果存 `reports/quality_<時間>.json`（`reports/` 不進版控）。隨機抽樣誤差約 ±3～5%。
+
+| # | 問題 | 改善前 | 改善後 | 怎麼修 |
+|---|---|---|---|---|
+| 1 | 出現一樣的東西 | 82.0% | 100% | `/recommend` 合併重複上架（用日韓**原文**去廣告詞後比對，中文是分開翻譯的比不出來；色號、片數、補充包不同不算重複）：`api/text_quality.is_duplicate` |
+| 2 | 圖片離家出走 | 98.5% | 100% | 樂天賣家換圖舊網址 404：`scripts/fix_broken_images.py` 用 Playwright 開商品頁抓 og:image（樂天擋一般程式連線）；`/recommend` 圖片改從 MongoDB 讀 |
+| 3 | 負評 0 卻有常見缺點 | 99.5% | 100% | 前端：負評 0 時標題改「好評中也有人提到」 |
+| 4 | 有負評但沒有統整 | 79.0% | 99.5% | `scripts/fill_missing_cons.py`：有負評沒缺點摘要的 225 個商品，用「1 人提到也算」重新統計＋AI 寫摘要（補了 207 個）；前端只有 1 人提到時標題寫「少數使用者提到」 |
+| 5 | 洗面奶是支語 | 99.0% | 100% | `scripts/fix_text_data.py --mainland`（41 筆），清單在 `api/text_quality.MAINLAND_TERMS` |
+| 6 | 幹話太多 | 32.5% | 100% | 顯示名稱拿掉廣告詞、關鍵字清單、太長截斷（`api/text_quality.display_name`），資料庫原名不動，滑鼠移到名稱上看完整原名 |
+| 7 | 亂打字也查得到 | 34.6% | 100% | 相似度門檻擋不了（tjgjfgke 0.711 ≈ 正常查詢 0.744），改規則：沒有中日韓文字、英文詞也不在任何商品名稱品牌裡 → 查無此資料（`api/recommend.looks_meaningful`） |
+| 8 | 翻譯不正確（肌膚正確遮瑕膏） | 83.5% | 93.0% | `scripts/fix_text_data.py --translation`：Gemini 對照原文檢查 1972 筆，修正 776 筆（舊名存 `name_zh_before_fix`） |
+| | **平均** | **76.1%** | **99.1%** | |
+
+### 12-2. ⚠ 要人工確認的
+
+- **第 8 點的 776 筆翻譯修正**：Gemini 偶爾會加油添醋（例：原文只有 ダイブイン マスク，被改成「Dive-In 低分子玻尿酸補水面膜」）。`scripts/review_name_fixes.py` 讓 AI 二次審查並標記可疑的，輸出到 `Downloads\商品名稱翻譯修正對照表.csv`（可疑的排最前面，2026-10-02 二次審查標出 219 筆），**人工看標記的那些**，改錯的可單筆還原成 `name_zh_before_fix`
+- 第 8 項分數是 Gemini 檢查 Gemini 修過的翻譯，可能偏高，報告時要寫清楚量法
+
+### 12-3. 備份與還原
+
+- 改資料前整個 products 備份在 `reports/backup_products_20261002_171036.json`
+- 全部還原名稱與摘要：`python -m scripts.fix_text_data --restore reports/backup_products_20261002_171036.json`
+- 改了商品名稱後要重建搜尋索引（網站先關）：`python -c "from rag.embedder import build_product_index; build_product_index()"`
+
+### 12-4. 其他順便修的
+
+- `db/mongo_client.py`：Atlas 連線逾時 3 秒 → 15 秒；DNS 查不到 SRV 紀錄時自動重試並改用 8.8.8.8 / 1.1.1.1（這台的網路 DNS 常逾時，網站第一次搜尋會隨機 500）
+- 回傳筆數上限 50 → 200（前端選單加 50/100/200）
+
+### 12-5. 第二輪：OpenAI（gpt-4.1）獨立檢查與修正（2026-10-02）
+
+Gemini 產生的內容改用不同家的 OpenAI 檢查（`scripts/openai_judge.py`），再依結果修正（`scripts/round2_fixes.py`），最後兩家各自判斷同一批樣本（`scripts/verify_dual.py`）。金鑰用 `--env` 指向另一份 .env，不寫進專案。
+
+| 項目 | Gemini 判斷 | OpenAI 判斷 |
+|---|---|---|
+| 翻譯正確率（同一批 200，改善前 → 後） | 80.0% → 92.5% | 75.0% → 77.0%（未達 80%） |
+| 補寫缺點摘要忠實度 | 額度用完未完成 | 第一輪 73.5% → 第二輪 95.5% |
+
+第二輪：還原 80 筆「修正前較好」的翻譯（`name_fix_reverted`）、71 筆拿掉多加內容（`name_fix_stripped`，第一輪結果存 `name_zh_round1`）、缺點摘要重寫 77 個／移除 4 個（舊的存 `ai_summary.cons_round1`）。第二輪前備份：`reports/backup_products_20261002_202125.json`。
+人工審核表已依兩家 AI 的疑慮排序：優先 64 筆、其次 125 筆。完整報告：https://claude.ai/artifact/1fiTsq3kZA3dXQi8Uq8NPQ
+
+### 12-6. 第三輪（2026-10-03）：全商品重新翻譯 + 亂打警示
+
+組員回報：名稱還有整段日文（ディオールショウ サンク クルール）、英文直譯（Pure C Mask → 純C面膜）。前兩輪只檢查「意思錯沒錯」並把保留原文當成沒錯，所以沒翻的日韓文沒被抓到。
+
+- **重新翻譯**（`scripts/retranslate_all.py`，OpenAI gpt-4.1）：卡片上所有文字（名稱、品牌／店名、評論摘要、適合族群、缺點摘要）對照原文檢查，1,300 個商品 1,717 處修改（舊內容存 `v3_before.<欄位>`）。規則：日韓文一律翻成台灣繁中；英文品牌、系列名保留但說明翻出意思（Pure C Mask → 純維他命C面膜）；片假名品牌用台灣中文名（キュレル → 珂潤）；沒有中文名的專有名詞用官方英文或羅馬拼音；店名 公式ショップ → 官方商店。殘留的 34 個詞用逐詞替換＋6 筆人工修正。人工審核表：`Downloads\商品翻譯全面修正對照表_1003.csv`
+- **亂打警示**（`api/recommend.query_warning`、`api/main.py` 的 `force`）：規則判斷是亂打（英文詞、中日韓兩字詞都不在商品資料裡；只有數字、注音）**或**第 1 名相似度 < 0.58（使用者指定）→ 回傳 `warning`，前端顯示〔回去修改〕〔仍要搜尋〕。相似度單獨用效果差（亂打 0.31～0.78、正常 0.577～0.94 重疊；中文亂打「的的的」0.70），主要靠規則
+- 品質檢查第 7 項改成檢查警示（含中文亂打），新增第 9 項「沒有沒翻完的日韓文」（全部 1,973 筆，不抽樣；「・」「ー」標點不算）
+- 第三輪前備份：`reports/backup_products_20261003_144925.json`
+
+| 項目 | 結果 |
+|---|---|
+| 品質檢查 9 項平均 | 99.1%（第 7、9 項 100%） |
+| 翻譯正確率（同一批 200，改善前 → 後） | Gemini 80.5% → 92.0%；OpenAI 67.5% → 81.0% |
+| 缺點摘要忠實度（OpenAI） | 94.5%（Gemini 被限流，未完成） |

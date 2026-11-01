@@ -13,3 +13,11 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# 品質檢查報告、資料備份（含完整商品資料，不進版控）
+reports/
+
+# logs / db dumps / local reports
+*.log
+*.sql
+reports/

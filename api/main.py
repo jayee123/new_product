@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
 
-from api.recommend import recommend, SORT_OPTIONS
+from api.recommend import recommend, query_warning, SORT_OPTIONS
 from auth.service import (
     AuthError,
     register as auth_register,
@@ -58,12 +58,14 @@ class RecommendRequest(BaseModel):
     product_type: Optional[str] = Field(
         None, description='統一產品類型精確比對，值來自 GET /product-types，例如「精華液」「氣墊」'
     )
-    top_k: int = Field(10, ge=1, le=50, description="回傳幾筆")
+    top_k: int = Field(10, ge=1, le=200, description="回傳幾筆（最多 200）")
     sort_by: str = Field(
         "recommended",
         description='排序方式："recommended"（綜合推薦，預設：有無評論→好評率等級→星等→相關度）/ '
                     '"price_low"（價格低→高）/ "price_high"（價格高→低）',
     )
+
+    force: bool = Field(False, description="true＝使用者在「可能有錯字」警示按了「仍要搜尋」，不再檢查")
 
     @field_validator("sort_by")
     @classmethod
@@ -135,6 +137,12 @@ def logout_endpoint(authorization: str = Header(None)):
 
 @app.post("/recommend")
 def recommend_endpoint(req: RecommendRequest, authorization: str = Header(None)):
+    # 疑似亂打（規則或相似度太低）→ 先不搜尋，回傳警示讓使用者決定「回去修改」或「仍要搜尋」（帶 force）
+    if not req.force:
+        warning = query_warning(req.query, req.product_type)
+        if warning:
+            return {"query": req.query, "count": 0, "results": [], "warning": warning}
+
     results = recommend(
         query=req.query,
         budget=req.budget,

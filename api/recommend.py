@@ -4,6 +4,7 @@
 import re
 
 import currency
+from api.text_quality import display_name, is_duplicate
 from db.mongo_client import get_db
 from rag.embedder import query_products
 
@@ -74,6 +75,79 @@ def _exact_name_matches(query: str, limit: int, product_type: str = None) -> lis
     return output
 
 
+_CJK = re.compile(r"[぀-ヿ㐀-鿿가-힯]")
+_CJK_RUN = re.compile(r"[぀-ヿ㐀-鿿가-힯]+")
+_ASCII_WORD = re.compile(r"[a-z][a-z0-9+\-]*")
+_vocab = None
+
+# 亂打警示的相似度門檻（使用者 2026-10-03 指定 0.58）：比的是「第 1 名商品」的相似度。
+# 實測 100 個亂打英文字串第 1 名相似度 0.31～0.78、63 個正常查詢 0.577～0.94，兩邊大幅重疊，
+# 所以門檻只是第二道保險（抓到約一半亂打、curel 0.577 會被誤警示），主要靠 looks_meaningful 的規則。
+LOW_SIMILARITY_WARNING = 0.58
+
+
+def _get_vocab() -> dict:
+    """商品資料裡出現過的英文詞、中日韓兩字詞（名稱、品牌、類型、評論摘要），判斷查詢是不是亂打的用"""
+    global _vocab
+    if _vocab is None:
+        ascii_words, bigrams, chars = set(), set(), set()
+        for p in get_db().products.find({}, {"name_zh": 1, "name_local": 1, "brand_zh": 1, "brand_local": 1,
+                                             "product_type": 1, "category": 1, "ai_summary": 1}):
+            s = p.get("ai_summary") or {}
+            text = " ".join(str(x or "") for x in (
+                p.get("name_zh"), p.get("name_local"), p.get("brand_zh"), p.get("brand_local"), p.get("product_type"),
+                p.get("category"), s.get("summary"), s.get("suggested_for"), s.get("cons")))
+            ascii_words.update(w for w in _ASCII_WORD.findall(text.lower()) if len(w) >= 2)
+            for run in _CJK_RUN.findall(text):
+                bigrams.update(run[i:i + 2] for i in range(len(run) - 1))
+            chars.update(p.get("product_type") or "")
+        _vocab = {"ascii": ascii_words, "bigrams": bigrams, "type_chars": chars}
+    return _vocab
+
+
+def looks_meaningful(query: str) -> bool:
+    """規則判斷查詢是不是亂打的（例：tjgjfgke、12345、的的的、ㄅㄆㄇ）：
+    - 中日韓文字：至少一個「兩字詞」在商品資料裡出現過（保濕、乳液 有；的的、哈哈、你好 沒有）；
+      只打一個字時，那個字要出現在商品類型名稱裡（例：霜）
+    - 英文：至少一個英文詞在商品名稱或品牌裡出現過（例：dior、spf50），長度 ≥4 的可以是開頭（例：canm）
+    - 只有數字、注音符號、符號 → 亂打
+    語意搜尋一定會回傳「最接近」的商品，亂打字串的相似度跟正常查詢重疊，不能單靠相似度判斷。"""
+    q = (query or "").strip().lower()
+    if not q:
+        return False
+    v = _get_vocab()
+    for run in _CJK_RUN.findall(q):
+        if len(run) == 1 and run in v["type_chars"]:
+            return True
+        if any(run[i:i + 2] in v["bigrams"] for i in range(len(run) - 1)):
+            return True
+    words = [w for w in _ASCII_WORD.findall(q) if len(w) >= 2]
+    return any(w in v["ascii"] or (len(w) >= 4 and any(a.startswith(w) for a in v["ascii"])) for w in words)
+
+
+def query_warning(query: str, product_type: str = None):
+    """要不要對這個查詢跳「可能有錯字或雜訊」的警示：規則判斷是亂打，或第 1 名相似度 < LOW_SIMILARITY_WARNING。
+    商品名稱精確命中就不警示。回傳警示文字或 None。"""
+    if _exact_name_matches(query, limit=1, product_type=product_type):
+        return None
+    if not looks_meaningful(query):
+        return "你輸入的內容可能有錯字或雜訊，要不要檢查一下？"
+    top = query_products(query, top_k=1, product_type=product_type)
+    if not top or (top[0].get("similarity") or 0) < LOW_SIMILARITY_WARNING:
+        return "你輸入的內容跟資料庫裡的商品都不太相關，可能有錯字或雜訊，要不要檢查一下？"
+    return None
+
+
+def _dedupe(results: list[dict]) -> list[dict]:
+    """同一個商品被不同店家重複上架（原文名稱去掉廣告詞後幾乎一樣，見 api/text_quality.is_duplicate），
+    只留排在前面的那一筆（已經排序過，所以留下的是排名較好的）"""
+    kept = []
+    for r in results:
+        if not any(is_duplicate(r["_name_local"], k["_name_local"]) for k in kept):
+            kept.append(r)
+    return kept
+
+
 def _pos_rate_grade(r: dict) -> int:
     """好評率等級：A=2、B=1、C=0；評論數太少的最高只到 B"""
     rate = r["sentiment_pos_rate"]
@@ -120,7 +194,9 @@ def recommend(query: str, budget: int = None, country: str = None,
     sort_by:      "recommended"（預設，綜合推薦：有無評論→好評率等級→星等→相關度 硬排序）/
                   "price_low"（價格低→高，依台幣）/ "price_high"（價格高→低，依台幣）
     """
-    pool_size = top_k * RERANK_POOL_MULTIPLIER if sort_by == "recommended" else top_k
+    # 亂打字的警示在 API 層（api/main.py 呼叫 query_warning，使用者按「仍要搜尋」才帶 force 繞過）
+    # 候選池比 top_k 大：綜合推薦要重排，重複商品合併後也還要湊得到 top_k 筆
+    pool_size = top_k * RERANK_POOL_MULTIPLIER
     fetch_limit = pool_size * OVERFETCH_MULTIPLIER
     exact_matches = _exact_name_matches(query, limit=fetch_limit, product_type=product_type)
     semantic_matches = query_products(query, top_k=fetch_limit, product_type=product_type)
@@ -164,7 +240,7 @@ def recommend(query: str, budget: int = None, country: str = None,
         d["source_url"]: d
         for d in db.products.find(
             {"source_url": {"$in": urls}},
-            {"_id": 0, "source_url": 1, "ai_summary": 1, "complaint_stats": 1},
+            {"_id": 0, "source_url": 1, "ai_summary": 1, "complaint_stats": 1, "name_local": 1, "image_url": 1},
         )
     }
 
@@ -190,7 +266,9 @@ def recommend(query: str, budget: int = None, country: str = None,
         sentiment_pos_rate = round(pos / (pos + neg), 4) if (pos + neg) > 0 else None
 
         results.append({
-            "name": c.get("name", ""),
+            # 顯示用名稱拿掉賣家塞的廣告詞（api/text_quality.display_name）；原始名稱放 name_full
+            "name": display_name(c.get("name", "")),
+            "name_full": c.get("name", ""),
             "brand": c.get("brand", ""),
             "category": c.get("category", ""),
             "product_type": c.get("product_type", ""),
@@ -199,7 +277,8 @@ def recommend(query: str, budget: int = None, country: str = None,
             "price_twd": price_twd,
             "price_original": price,
             "currency_original": c.get("currency", ""),
-            "image_url": c.get("image_url", ""),
+            # 圖片從 MongoDB 讀（scripts/fix_broken_images.py 修過的新網址），搜尋索引裡存的可能是舊的
+            "image_url": product_doc.get("image_url") or c.get("image_url", ""),
             "source_url": source_url,
             "similarity": c.get("similarity"),
             "rating_platform": rating if rating is not None and rating >= 0 else None,
@@ -211,15 +290,18 @@ def recommend(query: str, budget: int = None, country: str = None,
             "ai_summary": ai_summary,
             "complaint_stats": complaint_stats,
             "_exact": c.get("_exact", False),
+            "_name_local": product_doc.get("name_local") or "",
         })
 
     if sort_by == "recommended":
-        results = _rank_recommended(results)[:top_k]
+        results = _rank_recommended(results)
     elif sort_by == "price_low":
         results.sort(key=lambda r: r["price_twd"] if r["price_twd"] is not None else float("inf"))
     elif sort_by == "price_high":
         results.sort(key=lambda r: r["price_twd"] if r["price_twd"] is not None else -1, reverse=True)
+    results = _dedupe(results)[:top_k]
 
     for r in results:
         r.pop("_exact", None)
+        r.pop("_name_local", None)
     return results

@@ -274,12 +274,6 @@
   .chip:hover { background: var(--accent-soft-border); }
   .chip:active { transform: scale(0.97); }
 
-  .chip-hint {
-    margin-top: 6px;
-    font-size: 12.5px;
-    color: var(--ink-faint);
-  }
-
   .filters {
     margin-top: 18px;
     padding-top: 18px;
@@ -319,6 +313,18 @@
     min-height: 18px;
   }
   #statusBar.error { color: var(--coral); }
+  .query-warning {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+    padding: 10px 12px; border-radius: 10px;
+    background: var(--warn-soft, #fff4e5); color: var(--ink);
+    border: 1px solid var(--warn, #e0a03c);
+  }
+  .query-warning .qw-text { flex: 1 1 260px; }
+  .query-warning button {
+    padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--surface, #fff); color: var(--ink); cursor: pointer; font: inherit;
+  }
+  .query-warning button.qw-go { background: var(--accent-strong); color: #fff; border-color: transparent; }
 
   /* ── 結果卡片 ───────────────────────────────── */
 
@@ -424,7 +430,6 @@
     border-radius: 8px;
   }
   .cons-title { font-size: 12.5px; font-weight: 700; color: var(--warn); }
-  .cons-note { font-size: 10.5px; font-weight: 400; color: var(--ink-faint); margin-left: 4px; }
   .cons-text { font-size: 12.5px; color: var(--ink); line-height: 1.6; margin: 5px 0 6px; }
   .cons-tags { display: flex; flex-wrap: wrap; gap: 5px; }
   .cons-tag {
@@ -492,7 +497,6 @@
     </div>
 
     <div class="suggestions" id="suggestions"></div>
-    <div class="chip-hint">💡 上面這些是實測過「資料最完整」的查詢——同時查得到商品資料、平台評分、跟真實社群評論。隨便打的關鍵字也能查，但不一定每筆商品都配對得到評論。</div>
 
     <div class="filters">
       <div class="field">
@@ -513,6 +517,9 @@
           <option value="6">6</option>
           <option value="10" selected>10</option>
           <option value="20">20</option>
+          <option value="50">50</option>
+          <option value="100">100</option>
+          <option value="200">200</option>
         </select>
       </div>
       <div class="field">
@@ -692,15 +699,21 @@ function renderCard(item) {
       // 缺點摘要文字只根據這份統計改寫；只顯示摘要＋面向標籤，不顯示評論原文（2026-09-30 使用者決定拿掉「看原文」）
       let consHtml = "";
       const cs = item.complaint_stats;
-      if (cs && cs.aspects && cs.aspects.length > 0) {
-        const tags = cs.aspects.map(a =>
+      const aspects = (cs && cs.aspects) || [];
+      if (aspects.length > 0 || item.ai_summary.cons) {
+        const tags = aspects.map(a =>
           `<span class="cons-tag">${escapeHtml(a.aspect)} ×${a.count}</span>`).join("");
+        // 標題照實際情況：負評 0 → 好評中也有人提到；每個缺點都只有 1 人提到 → 少數使用者提到；否則 → 常見缺點
+        const maxCount = Math.max(0, ...aspects.map(a => a.count));
+        // 被判成負評、但評論裡其實沒有具體抱怨的商品（cons_source = no_complaint_found）
+        const consTitle = item.ai_summary.cons_source === "no_complaint_found" ? "ℹ 缺點"
+          : item.sentiment_negative === 0 ? "⚠ 好評中也有人提到"
+          : maxCount >= 2 ? "⚠ 常見缺點" : "⚠ 少數使用者提到";
         consHtml = `
           <div class="cons-block">
-            <div class="cons-title">⚠ 常見缺點
-              <span class="cons-note">依取樣的 ${cs.n_analyzed} 則評論統計，至少 2 人提到才列出</span></div>
+            <div class="cons-title">${consTitle}</div>
             ${item.ai_summary.cons ? `<p class="cons-text">${escapeHtml(item.ai_summary.cons)}</p>` : ""}
-            <div class="cons-tags">${tags}</div>
+            ${tags ? `<div class="cons-tags">${tags}</div>` : ""}
           </div>`;
       }
       // 有 AI 摘要就優先顯示摘要，不要再列一堆評論標題
@@ -734,7 +747,7 @@ function renderCard(item) {
           <span class="tag platform">${escapeHtml(item.source_platform)}</span>
           <span class="tag similarity">相似度 ${item.similarity}</span>
         </div>
-        <div class="name">${escapeHtml(item.name)}</div>
+        <div class="name" title="${escapeHtml(item.name_full || item.name)}">${escapeHtml(item.name)}</div>
         <div class="brand">${escapeHtml(item.brand) || "（無品牌資訊）"} · ${escapeHtml(item.product_type) || "未分類"}</div>
         <div class="price-row">
           <span class="price">${priceText}</span>
@@ -754,7 +767,17 @@ function onSortChange() {
   if (hasSearched) doSearch();
 }
 
-async function doSearch() {
+// 「可能有錯字或雜訊」警示的「回去修改」：保留打的字、游標回到需求描述欄
+function backToEdit() {
+  const statusBar = document.getElementById("statusBar");
+  statusBar.className = "";
+  statusBar.textContent = "";
+  const q = document.getElementById("query");
+  q.focus();
+  q.select();
+}
+
+async function doSearch(force = false) {
   const query = document.getElementById("query").value.trim();
   const statusBar = document.getElementById("statusBar");
   const resultsEl = document.getElementById("results");
@@ -772,6 +795,7 @@ async function doSearch() {
     top_k: parseInt(document.getElementById("topk").value, 10),
     sort_by: document.getElementById("sortBy").value,
   };
+  if (force === true) body.force = true;
   const country = document.getElementById("country").value;
   const budget = document.getElementById("budget").value;
   const productType = document.getElementById("productType").value.trim();
@@ -811,8 +835,17 @@ async function doSearch() {
     }
     const data = await resp.json();
 
-    if (data.count === 0) {
-      statusBar.textContent = "沒有符合條件的商品，試試看放寬預算或不限國家。";
+    if (data.warning) {
+      // 疑似亂打：先不顯示結果，讓使用者決定回去修改或仍要搜尋
+      statusBar.className = "";
+      statusBar.innerHTML = `<div class="query-warning">
+          <span class="qw-text">⚠ ${escapeHtml(data.warning)}</span>
+          <button type="button" onclick="backToEdit()">回去修改</button>
+          <button type="button" class="qw-go" onclick="doSearch(true)">仍要搜尋</button>
+        </div>`;
+      resultsEl.innerHTML = "";
+    } else if (data.count === 0) {
+      statusBar.textContent = "查無此資料。請換個說法描述需求（例如「乾性肌保濕精華」），或放寬預算、不限國家。";
       resultsEl.innerHTML = "";
     } else {
       const withReviews = data.results.filter(r => r.matched_review_count > 0).length;
