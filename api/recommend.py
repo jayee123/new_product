@@ -24,18 +24,22 @@ OVERFETCH_MULTIPLIER = 6
 
 SORT_OPTIONS = ("recommended", "price_low", "price_high")
 
-# ── 綜合推薦（sort_by="recommended"）：硬排序，不用權重（2026-09-29 改，數值還在跟團隊討論）──
+# ── 綜合推薦（sort_by="recommended"）：硬排序，不用權重 ──
 # 依序比較，前一個條件一樣才比下一個：
-#   1. 有沒有社群評論（有的在前，沒有的一律排最後）
-#   2. 好評率等級（A > B > C，見 POS_RATE_GRADES）
-#   3. 平台星等（高→低）
-#   4. 相關度（高→低）
-# 好評率跟相關度都是連續小數幾乎不會同分，直接拿來硬排序等於只有第一個條件有作用，
-# 所以好評率先分級，同一級裡面才輪到比星等。
-POS_RATE_GRADES = (0.90, 0.80)   # ≥90% A 級、80~90% B 級、<80% C 級
-MIN_REVIEWS_FOR_TOP_GRADE = 5    # 評論數不到這個數不能進 A 級（避免「1 則好評＝100%」衝到最前面）
+#   1. 好評率（高→低；沒有社群評論的沒有好評率，一律排最後）
+#   2. 平台星等（高→低）
+#   3. 相關度（高→低）
+# 2026-11-11 使用者決定拿掉好評率等級（A/B/C）與「評論 < 5 則最高只到 B」，直接比好評率數字，
+# 不看評論數。代價：只有 1 則好評的商品（100%）會排到最前面；好評率很少剛好同分，星等/相關度很少用到。
 # 綜合推薦要在比 top_k 更大的候選池裡重排，不然只是把最相關的 10 筆換個順序
 RERANK_POOL_MULTIPLIER = 3
+
+
+def _display_brand(platform, brand_local, brand_zh) -> str:
+    """卡片上的品牌／賣家文字：所有平台都顯示原文（日文／韓文），沒有原文才用翻譯
+    （2026-11-14 使用者要求；樂天的 brand 欄位其實是賣家店名）。
+    翻譯過的 brand_zh 還留在資料庫，搜尋、品牌合併（scripts/brand_dedup.py）照樣用它。"""
+    return brand_local or brand_zh or ""
 
 
 def _exact_name_matches(query: str, limit: int, product_type: str = None) -> list[dict]:
@@ -59,7 +63,8 @@ def _exact_name_matches(query: str, limit: int, product_type: str = None) -> lis
         output.append({
             "source_url":            p.get("source_url", ""),
             "name":                  p.get("name_zh") or p.get("name_local", ""),
-            "brand":                 p.get("brand_zh") or p.get("brand_local", ""),
+            "brand":                 _display_brand(p.get("source_platform"), p.get("brand_local"),
+                                                    p.get("brand_zh")),
             "origin":                "JP" if p.get("currency") == "JPY" else "KR",
             "image_url":             p.get("image_url", ""),
             "price":                 p.get("price") if p.get("price") is not None else -1,
@@ -140,28 +145,109 @@ def query_warning(query: str, product_type: str = None):
 
 def _dedupe(results: list[dict]) -> list[dict]:
     """同一個商品被不同店家重複上架（原文名稱去掉廣告詞後幾乎一樣，見 api/text_quality.is_duplicate），
-    只留排在前面的那一筆（已經排序過，所以留下的是排名較好的）"""
+    只留排在前面的那一筆（已經排序過，所以留下的是排名較好的）；被合併掉的放進留下那筆的 _dups，比價用"""
     kept = []
     for r in results:
-        if not any(is_duplicate(r["_name_local"], k["_name_local"]) for k in kept):
+        keeper = next((k for k in kept if is_duplicate(r["_name_local"], k["_name_local"])), None)
+        if keeper is None:
+            r["_dups"] = []
             kept.append(r)
+        else:
+            keeper["_dups"].append(r)
     return kept
 
 
-def _pos_rate_grade(r: dict) -> int:
-    """好評率等級：A=2、B=1、C=0；評論數太少的最高只到 B"""
-    rate = r["sentiment_pos_rate"]
-    grade = sum(rate >= cut for cut in POS_RATE_GRADES)
-    if r["sentiment_positive"] + r["sentiment_negative"] < MIN_REVIEWS_FOR_TOP_GRADE:
-        grade = min(grade, len(POS_RATE_GRADES) - 1)
-    return grade
+# ── 比價：同一個商品、不同賣家（2026-11-16）──
+# 找法：短名稱 name_short 一樣（品牌＋品項＋重點＋容量／色號，scripts/build_short_names.py），而且
+#   - 短名稱裡有數字（容量或色號），或原文名稱 is_duplicate；太籠統的短名稱（沒容量）不靠短名稱配對
+#     （樂天各店家原文名稱塞的廣告詞差很多，is_duplicate 常常比不出來，所以有容量時信任短名稱）
+#   - 價格差太多（不在主商品的 0.6～1.6 倍內）視為不同包裝／數量，不放進比價；實測同款各店價差約 1.45 倍以內，兩倍通常是 1 入 vs 2 入
+OFFER_PRICE_RATIO = (0.6, 1.6)
+_HAS_DIGIT = re.compile(r"\d")
+
+
+def _is_same_offer(main: dict, other: dict) -> bool:
+    if not _HAS_DIGIT.search(main.get("_name_short") or ""):
+        if main["source_platform"] != other.get("source_platform") or \
+                not is_duplicate(main["_name_local"], other.get("name_local") or ""):
+            return False
+    p, q = main.get("price_twd"), other.get("_price_twd")
+    if p and q and not (OFFER_PRICE_RATIO[0] <= q / p <= OFFER_PRICE_RATIO[1]):
+        return False
+    return True
+
+
+def _offer(doc: dict, pos: int, neg: int, price_twd) -> dict:
+    rating = doc.get("rating_platform")
+    if rating is not None and rating >= 0 and doc.get("source_platform") == "cosme":
+        rating = round(rating / 7 * 5, 2)
+    return {
+        "store": _display_brand(doc.get("source_platform"), doc.get("brand_local"), doc.get("brand_zh")),
+        "source_platform": doc.get("source_platform", ""),
+        "source_url": doc.get("source_url", ""),
+        "price_twd": price_twd,
+        "price_original": doc.get("price") if (doc.get("price") or -1) >= 0 else None,
+        "currency_original": doc.get("currency", ""),
+        "rating_platform": rating if rating is not None and rating >= 0 else None,
+        "review_count_platform": doc.get("review_count_platform") or None,
+        "sentiment_positive": pos,
+        "sentiment_negative": neg,
+    }
+
+
+def _attach_offers(results: list[dict], db) -> None:
+    """每個結果加上 offers（含自己，依台幣價格低→高）；只有一家賣的商品 offers 只有自己一筆"""
+    names = [r["_name_short"] for r in results if r.get("_name_short")]
+    fields = {"_id": 0, "source_url": 1, "source_platform": 1, "name_local": 1, "name_short": 1, "brand_local": 1,
+              "brand_zh": 1, "price": 1, "currency": 1, "rating_platform": 1, "review_count_platform": 1}
+    by_name = {}
+    for d in db.products.find({"name_short": {"$in": names}, "hidden": {"$ne": True}}, fields):
+        d["_price_twd"] = _price_twd(d.get("price"), d.get("currency"))
+        by_name.setdefault(d["name_short"], []).append(d)
+
+    picked = {}   # 主商品 url -> 同款其他賣家的 doc
+    for r in results:
+        own = {r["source_url"]}
+        others = []
+        for d in by_name.get(r.get("_name_short"), []) + [{**x, "_price_twd": x["price_twd"], "name_local": x["_name_local"],
+                                                             "_from_dup": True} for x in r.get("_dups", [])]:
+            if d["source_url"] in own:
+                continue
+            if d.get("_from_dup") or _is_same_offer(r, d):
+                own.add(d["source_url"])
+                others.append(d)
+        picked[r["source_url"]] = others
+
+    other_urls = [d["source_url"] for ds in picked.values() for d in ds]
+    counts = {}
+    if other_urls:
+        for row in db.reviews.aggregate([
+            {"$match": {"product_id": {"$in": other_urls}}},
+            {"$project": {"product_id": 1, "s": {"$ifNull": ["$sentiment_roberta", "$sentiment"]}}},
+            {"$match": {"s": {"$in": ["positive", "negative"]}}},
+            {"$group": {"_id": {"p": "$product_id", "s": "$s"}, "n": {"$sum": 1}}},
+        ]):
+            counts[(row["_id"]["p"], row["_id"]["s"])] = row["n"]
+        full = {d["source_url"]: d for d in db.products.find({"source_url": {"$in": other_urls}}, fields)}
+    for r in results:
+        offers = [{
+            "store": r["brand"], "source_platform": r["source_platform"], "source_url": r["source_url"],
+            "price_twd": r["price_twd"], "price_original": r["price_original"],
+            "currency_original": r["currency_original"], "rating_platform": r["rating_platform"],
+            "review_count_platform": r["review_count_platform"],
+            "sentiment_positive": r["sentiment_positive"], "sentiment_negative": r["sentiment_negative"],
+        }]
+        for d in picked[r["source_url"]]:
+            u = d["source_url"]
+            offers.append(_offer(full.get(u, d), counts.get((u, "positive"), 0), counts.get((u, "negative"), 0),
+                                 d.get("_price_twd")))
+        offers.sort(key=lambda o: o["price_twd"] if o["price_twd"] is not None else float("inf"))
+        r["offers"] = offers
 
 
 def _recommended_sort_key(r: dict) -> tuple:
-    has_reviews = r["sentiment_pos_rate"] is not None
     return (
-        has_reviews,
-        _pos_rate_grade(r) if has_reviews else -1,
+        r["sentiment_pos_rate"] if r["sentiment_pos_rate"] is not None else -1,
         r["rating_platform"] if r["rating_platform"] is not None else -1,
         r["similarity"] if r["similarity"] is not None else -1,
     )
@@ -169,7 +255,7 @@ def _recommended_sort_key(r: dict) -> tuple:
 
 def _rank_recommended(results: list[dict]) -> list[dict]:
     """
-    綜合推薦：硬排序（條件順序見檔案開頭 POS_RATE_GRADES 上方的說明）。
+    綜合推薦：硬排序（條件順序見檔案開頭 RERANK_POOL_MULTIPLIER 上方的說明）。
     精確命中商品名稱的排在語意搜尋結果前面（使用者就是在找那個商品），
     但一般詞（例如「防曬乳」）也會命中一大堆商品，所以精確命中的這批內部一樣照硬排序排。
     """
@@ -191,7 +277,7 @@ def recommend(query: str, budget: int = None, country: str = None,
                   （scripts/classify_product_types.py）產生的乾淨欄位，前端改成下拉選單，
                   使用者只能選這裡面已經存在的值，不會有比對不到的問題。
     top_k:        回傳幾筆
-    sort_by:      "recommended"（預設，綜合推薦：有無評論→好評率等級→星等→相關度 硬排序）/
+    sort_by:      "recommended"（預設，綜合推薦：好評率→星等→相關度 硬排序）/
                   "price_low"（價格低→高，依台幣）/ "price_high"（價格高→低，依台幣）
     """
     # 亂打字的警示在 API 層（api/main.py 呼叫 query_warning，使用者按「仍要搜尋」才帶 force 繞過）
@@ -204,8 +290,14 @@ def recommend(query: str, budget: int = None, country: str = None,
     seen_urls = {c["source_url"] for c in exact_matches}
     candidates = exact_matches + [c for c in semantic_matches if c["source_url"] not in seen_urls]
 
+    # hidden=True 的商品不顯示（2026-11-16 使用者要求先取消顯示松本清的商品；
+    # 設定／取消：python -m scripts.hide_products）
+    hidden_urls = set(get_db().products.distinct("source_url", {"hidden": True}))
+
     filtered = []
     for c in candidates:
+        if c["source_url"] in hidden_urls:
+            continue
         if country and c.get("origin") != country:
             continue
         price = c.get("price", -1)
@@ -240,7 +332,8 @@ def recommend(query: str, budget: int = None, country: str = None,
         d["source_url"]: d
         for d in db.products.find(
             {"source_url": {"$in": urls}},
-            {"_id": 0, "source_url": 1, "ai_summary": 1, "complaint_stats": 1, "name_local": 1, "image_url": 1},
+            {"_id": 0, "source_url": 1, "ai_summary": 1, "complaint_stats": 1, "name_local": 1, "image_url": 1,
+             "brand_local": 1, "name_short": 1},
         )
     }
 
@@ -266,10 +359,12 @@ def recommend(query: str, budget: int = None, country: str = None,
         sentiment_pos_rate = round(pos / (pos + neg), 4) if (pos + neg) > 0 else None
 
         results.append({
-            # 顯示用名稱拿掉賣家塞的廣告詞（api/text_quality.display_name）；原始名稱放 name_full
-            "name": display_name(c.get("name", "")),
+            # 顯示用名稱：優先用 AI 改寫的短名稱 name_short（寬度 ≤26、含容量，scripts/build_short_names.py）；
+            # 還沒產生短名稱的（例如新爬的商品）退回拿掉廣告詞的 display_name。原始名稱放 name_full（滑鼠移上去看得到）
+            "name": product_doc.get("name_short") or display_name(c.get("name", "")),
             "name_full": c.get("name", ""),
-            "brand": c.get("brand", ""),
+            "brand": _display_brand(c.get("source_platform"), product_doc.get("brand_local"),
+                                    c.get("brand", "")),
             "category": c.get("category", ""),
             "product_type": c.get("product_type", ""),
             "origin": c.get("origin", ""),
@@ -291,6 +386,7 @@ def recommend(query: str, budget: int = None, country: str = None,
             "complaint_stats": complaint_stats,
             "_exact": c.get("_exact", False),
             "_name_local": product_doc.get("name_local") or "",
+            "_name_short": product_doc.get("name_short") or "",
         })
 
     if sort_by == "recommended":
@@ -299,9 +395,18 @@ def recommend(query: str, budget: int = None, country: str = None,
         results.sort(key=lambda r: r["price_twd"] if r["price_twd"] is not None else float("inf"))
     elif sort_by == "price_high":
         results.sort(key=lambda r: r["price_twd"] if r["price_twd"] is not None else -1, reverse=True)
-    results = _dedupe(results)[:top_k]
+    results = _dedupe(results)
+    _attach_offers(results, db)
+    # 已經出現在前面某張卡片比價清單裡的商品，不再自己佔一張卡片
+    covered, merged = set(), []
+    for r in results:
+        if r["source_url"] in covered:
+            continue
+        covered.update(o["source_url"] for o in r["offers"])
+        merged.append(r)
+    results = merged[:top_k]
 
     for r in results:
-        r.pop("_exact", None)
-        r.pop("_name_local", None)
+        for k in ("_exact", "_name_local", "_name_short", "_dups"):
+            r.pop(k, None)
     return results

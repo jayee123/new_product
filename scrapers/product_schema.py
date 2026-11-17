@@ -217,3 +217,47 @@ def normalize_hwahae(row: dict) -> dict:
         "capacity": row.get("容量", ""),
         "scraped_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+_CAPACITY_RE = re.compile(r"(\d+(?:\.\d+)?\s*(?:ml|mL|ML|g|G|公克|毫升|入|片|錠|粒|包))")
+
+
+def normalize_matsukiyo(ld: dict, url: str) -> dict:
+    """
+    台灣松本清（Wix 商店）商品頁的 JSON-LD（@type Product）轉成統一 schema。
+    台灣官網：商品名本來就是中文，所以 name_local / name_zh 相同；售價是台幣。
+    網站沒有評論功能，rating / review_count 都是 None。
+    """
+    offers = ld.get("offers") or {}
+    if isinstance(offers, list):
+        offers = offers[0] if offers else {}
+    images = ld.get("image") or []
+    image_url = ""
+    if images:
+        first = images[0]
+        image_url = first.get("contentUrl", "") if isinstance(first, dict) else str(first)
+    brand = ld.get("brand") or {}
+    brand_name = brand.get("name", "") if isinstance(brand, dict) else str(brand)
+    name = (ld.get("name") or "").strip()
+    cap = _CAPACITY_RE.search(name)
+    slug = url.rstrip("/").rsplit("/", 1)[-1]
+
+    return {
+        "source_platform": "matsukiyo_tw",
+        "source_id": slug,
+        "source_url": url,
+        "name_local": name,
+        "name_zh": name,
+        "brand_local": brand_name,
+        "brand_zh": brand_name,
+        "category": "",  # 商品頁沒有分類資訊，交給 classify_product_types 用品名判斷
+        "price": _to_number(offers.get("price"), float),
+        "currency": offers.get("priceCurrency") or "TWD",
+        "image_url": image_url,
+        "description": (ld.get("description") or "").strip(),
+        "ingredients": [],
+        "rating_platform": None,
+        "review_count_platform": None,
+        "capacity": cap.group(1) if cap else "",
+        "scraped_at": datetime.now(timezone.utc).isoformat(),
+    }

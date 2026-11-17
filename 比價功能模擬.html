@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>比價功能模擬</title>
+<style>
+  :root {
+    --bg: #f2f5f1; --surface: #ffffff; --surface-2: #eaeee8; --border: #d8ded4;
+    --ink: #1a231d; --ink-soft: #57635a; --ink-faint: #8a978c;
+    --accent: #146a4f; --accent-strong: #0f5540; --accent-soft: #dcefe4; --accent-soft-border: #b7dcc7;
+    --coral: #c65b45; --coral-soft: #fbe7e1; --warn: #a3671f; --warn-soft: #f6e7d1;
+    --gold: #b7791f;
+    --shadow: 0 1px 2px rgba(20,30,22,.05), 0 8px 24px rgba(20,30,22,.06);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font-family: "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif; line-height: 1.55; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 16px 60px; }
+
+  .mock-banner { background: var(--warn-soft); color: var(--warn); font-size: 13.5px; font-weight: 600;
+                 padding: 10px 16px; text-align: center; border-bottom: 1px solid #ecd6b3; }
+  header.top { padding: 28px 0 18px; }
+  header.top h1 { margin: 0; font-size: 30px; letter-spacing: .5px; }
+  header.top p { margin: 4px 0 0; color: var(--ink-soft); font-size: 14.5px; }
+
+  .search { display: flex; gap: 10px; background: var(--surface); border: 1px solid var(--border);
+            border-radius: 14px; padding: 14px; box-shadow: var(--shadow); }
+  .search input { flex: 1; min-width: 0; font: inherit; font-size: 15px; padding: 10px 12px;
+                  border: 1px solid var(--border); border-radius: 10px; background: #fbfcfa; }
+  .search button { font: inherit; font-weight: 700; background: var(--accent); color: #fff; border: 0;
+                   border-radius: 10px; padding: 0 22px; cursor: pointer; }
+
+  .status { margin: 16px 2px 12px; color: var(--ink-soft); font-size: 14px; }
+  .status b { color: var(--ink); }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+          box-shadow: var(--shadow); margin-bottom: 18px; overflow: hidden; }
+  .card-main { display: grid; grid-template-columns: 132px 1fr auto; gap: 18px; padding: 18px; align-items: center; }
+  .thumb { width: 132px; height: 132px; border-radius: 12px; background: var(--surface-2);
+           display: flex; align-items: center; justify-content: center; overflow: hidden; }
+  .thumb img { width: 100%; height: 100%; object-fit: contain; background: #fff; }
+  .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+  .tag { font-size: 12px; font-weight: 700; padding: 2px 9px; border-radius: 999px;
+         background: var(--surface-2); color: var(--ink-soft); }
+  .tag.cmp { background: var(--accent-soft); color: var(--accent-strong); border: 1px solid var(--accent-soft-border); }
+  .tag.jp { background: #fdecef; color: #b4364f; }
+  .tag.kr { background: #e8eefc; color: #3555a8; }
+  .name { font-size: 19px; font-weight: 800; margin: 0; }
+  .brand { color: var(--ink-soft); font-size: 13.5px; margin-top: 2px; }
+  .merged { margin-top: 10px; font-size: 13.5px; color: var(--ink-soft); }
+  .merged b { color: var(--accent-strong); }
+  .pill { display: inline-block; font-size: 12px; font-weight: 700; padding: 1px 8px; border-radius: 999px; margin-left: 4px; }
+  .pill.pos { background: var(--accent-soft); color: var(--accent-strong); }
+  .pill.neg { background: var(--coral-soft); color: var(--coral); }
+
+  .price-box { text-align: right; min-width: 190px; }
+  .price-label { font-size: 12.5px; color: var(--ink-faint); }
+  .price-low { font-size: 28px; font-weight: 800; color: var(--coral); line-height: 1.15; }
+  .price-range { font-size: 13px; color: var(--ink-soft); }
+  .save { display: inline-block; margin-top: 6px; font-size: 12.5px; font-weight: 700; color: var(--accent-strong);
+          background: var(--accent-soft); padding: 2px 10px; border-radius: 999px; }
+  .toggle { margin-top: 10px; font: inherit; font-size: 13.5px; font-weight: 700; color: var(--accent-strong);
+            background: none; border: 1px solid var(--accent-soft-border); border-radius: 10px; padding: 6px 12px; cursor: pointer; }
+  .toggle:hover { background: var(--accent-soft); }
+
+  .bar { position: relative; height: 8px; border-radius: 999px; background: var(--surface-2); margin-top: 10px; }
+  .bar .dot { position: absolute; top: 50%; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%;
+              background: var(--ink-faint); border: 2px solid #fff; box-shadow: 0 0 0 1px var(--border); }
+  .bar .dot.low { background: var(--coral); }
+
+  .compare { display: none; border-top: 1px solid var(--border); background: #fafbf9; padding: 6px 18px 16px; }
+  .card.open .compare { display: block; }
+  .cmp-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin: 10px 0 8px; }
+  .cmp-head h3 { margin: 0; font-size: 15px; }
+  .sorts { display: flex; gap: 6px; }
+  .sorts button { font: inherit; font-size: 12.5px; padding: 4px 10px; border-radius: 999px; cursor: pointer;
+                  border: 1px solid var(--border); background: #fff; color: var(--ink-soft); }
+  .sorts button.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 14px; background: #fff; border-radius: 12px; overflow: hidden; }
+  th { text-align: left; font-size: 12.5px; color: var(--ink-faint); font-weight: 700; padding: 9px 10px;
+       border-bottom: 1px solid var(--border); background: #fff; }
+  td { padding: 11px 10px; border-bottom: 1px solid var(--surface-2); vertical-align: middle; }
+  tr:last-child td { border-bottom: 0; }
+  tr.best td { background: #fff7f4; }
+  .store { font-weight: 700; }
+  .plat { font-size: 12px; color: var(--ink-faint); }
+  .twd { font-weight: 800; font-size: 15.5px; }
+  .orig { font-size: 12px; color: var(--ink-faint); }
+  .diff { font-size: 12px; color: var(--coral); font-weight: 700; }
+  .badge { display: inline-block; font-size: 11.5px; font-weight: 800; padding: 1px 7px; border-radius: 6px; margin: 2px 4px 0 0; }
+  .badge.cheap { background: var(--coral); color: #fff; }
+  .badge.liked { background: var(--accent); color: #fff; }
+  .badge.star { background: var(--gold); color: #fff; }
+  .muted { color: var(--ink-faint); }
+  .go { font: inherit; font-size: 13px; font-weight: 700; color: #fff; background: var(--accent); border-radius: 8px;
+        padding: 6px 12px; text-decoration: none; white-space: nowrap; display: inline-block; }
+  .note { font-size: 12.5px; color: var(--ink-faint); margin-top: 10px; }
+
+  .explain { background: var(--surface); border: 1px dashed var(--accent-soft-border); border-radius: 14px;
+             padding: 14px 18px; font-size: 13.5px; color: var(--ink-soft); margin-top: 26px; }
+  .explain h4 { margin: 0 0 6px; color: var(--ink); font-size: 14.5px; }
+  .explain ul { margin: 0; padding-left: 20px; }
+
+  @media (max-width: 720px) {
+    .card-main { grid-template-columns: 88px 1fr; }
+    .thumb { width: 88px; height: 88px; }
+    .price-box { grid-column: 1 / -1; text-align: left; }
+    .name { font-size: 17px; }
+    thead { display: none; }
+    table, tbody, tr, td { display: block; width: 100%; }
+    tr { border-bottom: 1px solid var(--border); padding: 8px 0; }
+    td { border: 0; padding: 3px 10px; }
+    td[data-l]::before { content: attr(data-l) "："; color: var(--ink-faint); font-size: 12px; }
+  }
+</style>
+</head>
+<body>
+<div class="mock-banner">🧪 模擬畫面：比價功能示意，商品、賣家、價格、評論數取自目前資料庫的真實資料（2026-11）</div>
+<div class="wrap">
+  <header class="top">
+    <h1>Buy託了AI</h1>
+    <p>日韓藥妝智慧推薦系統 — 同一個商品，不同賣家一起比價</p>
+  </header>
+
+  <div class="search">
+    <input value="保濕面霜、睫毛膏、唇膏、化妝水" aria-label="需求描述">
+    <button type="button">搜尋</button>
+  </div>
+  <div class="status" id="status"></div>
+  <div id="list"></div>
+
+  <div class="explain">
+    <h4>這個畫面怎麼運作</h4>
+    <ul>
+      <li><b>怎麼判斷是同一個商品</b>：短名稱相同（品牌＋品項＋重點＋容量），再用日韓原文名稱比對確認（<code>is_duplicate</code>：色號、容量、補充包不同就不算同一個）。</li>
+      <li><b>一張卡片＝一個商品</b>：卡片上顯示最低價和價差，點「展開比價」看每一家賣家。</li>
+      <li><b>評論合併計算</b>：各賣家頁面上的評論加起來算一個好評率，也保留每一家自己的好評率。</li>
+      <li><b>價格</b>：日圓、韓元依匯率換算成新台幣，僅供參考；運費、點數回饋沒有算進去。</li>
+      <li><b>標籤</b>：<span class="badge cheap">最便宜</span>價格最低；<span class="badge liked">好評率最高</span>該賣家評論 ≥ 5 則中好評率最高；<span class="badge star">評價最多</span>平台評價數最多。</li>
+    </ul>
+  </div>
+</div>
+
+<script>
+const DATA = [{"name": "Curél 面霜 潤浸保濕 40g", "brand": "珂潤 Curél", "type": "面霜", "img": "https://thumbnail.image.rakuten.co.jp/@0_mall/rakuten24/cabinet/210/4901301236210.jpg?_ex=400x400", "sellers": [{"store": "楽天24", "platform": "rakuten", "price": 2970, "cur": "JPY", "twd": 612, "rating": 4.68, "rc": 91, "pos": 37, "neg": 8}, {"store": "Joshin web 家電とPCの大型専門店", "platform": "rakuten", "price": 2338, "cur": "JPY", "twd": 482, "rating": 5.0, "rc": 2, "pos": 1, "neg": 1}, {"store": "楽天24 コスメ館", "platform": "rakuten", "price": 2970, "cur": "JPY", "twd": 612, "rating": 4.63, "rc": 70, "pos": 27, "neg": 6}, {"store": "くすりのレデイハートショップ", "platform": "rakuten", "price": 2040, "cur": "JPY", "twd": 420, "rating": 4.33, "rc": 12, "pos": 0, "neg": 0}, {"store": "杏林堂 楽天市場店", "platform": "rakuten", "price": 2156, "cur": "JPY", "twd": 444, "rating": 4.08, "rc": 12, "pos": 1, "neg": 0}, {"store": "ツルハドラッグ", "platform": "rakuten", "price": 2158, "cur": "JPY", "twd": 445, "rating": 4.74, "rc": 58, "pos": 25, "neg": 6}, {"store": "アットコスメショッピング", "platform": "rakuten", "price": 2970, "cur": "JPY", "twd": 612, "rating": 5.0, "rc": 5, "pos": 4, "neg": 0}]}, {"name": "CLINIQUE 睫毛膏 #01 6mL", "brand": "倩碧 CLINIQUE", "type": "睫毛膏", "img": "https://thumbnail.image.rakuten.co.jp/@0_mall/cosmediva/cabinet/skuimage/topimage/lashpower.jpg?_ex=400x400", "sellers": [{"store": "COSME DIVA", "platform": "rakuten", "price": 3350, "cur": "JPY", "twd": 690, "rating": 4.52, "rc": 466, "pos": 40, "neg": 4}, {"store": "コスメリンク", "platform": "rakuten", "price": 3100, "cur": "JPY", "twd": 639, "rating": 4.76, "rc": 83, "pos": 41, "neg": 3}, {"store": "コスメ ヴィーナス 楽天市場店", "platform": "rakuten", "price": 3350, "cur": "JPY", "twd": 690, "rating": 4.54, "rc": 230, "pos": 45, "neg": 6}]}, {"name": "KATE 唇膏 怪獸 3g", "brand": "KATE", "type": "口紅", "img": "https://thumbnail.image.rakuten.co.jp/@0_mall/rakuten24/cabinet/829/405829.jpg?_ex=400x400", "sellers": [{"store": "楽天24", "platform": "rakuten", "price": 1540, "cur": "JPY", "twd": 317, "rating": 4.69, "rc": 562, "pos": 54, "neg": 5}, {"store": "楽天24 コスメ館", "platform": "rakuten", "price": 1540, "cur": "JPY", "twd": 317, "rating": 4.71, "rc": 342, "pos": 43, "neg": 5}, {"store": "シャン コスメディア楽天市場店", "platform": "rakuten", "price": 1386, "cur": "JPY", "twd": 286, "rating": 4.8, "rc": 546, "pos": 69, "neg": 1}]}, {"name": "d'Alba 化妝水 維他命 180mL", "brand": "d'Alba", "type": "化妝水", "img": "https://image.oliveyoung.co.kr/cfimages/cf-goods/uploads/images/thumbnails/400/10/0000/0022/A00000022342507ko.jpg?l=ko", "sellers": [{"store": "달바", "platform": "oliveyoung", "price": 20900, "cur": "KRW", "twd": 515, "rating": 4.9, "rc": 1023, "pos": 30, "neg": 9}, {"store": "dAlba楽天市場店", "platform": "rakuten", "price": 2540, "cur": "JPY", "twd": 523, "rating": 4.77, "rc": 800, "pos": 54, "neg": 7}]}];
+
+const PLATFORM = { rakuten: "樂天市場（日）", oliveyoung: "Olive Young（韓）", cosme: "@cosme（日）", hwahae: "화해（韓）" };
+const CUR = { JPY: "円", KRW: "₩" };
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const rate = s => (s.pos + s.neg) > 0 ? s.pos / (s.pos + s.neg) : null;
+const pct = r => r == null ? "—" : Math.round(r * 100) + "%";
+const sortState = {};
+
+function badges(g) {
+  const minTwd = Math.min(...g.sellers.map(s => s.twd));
+  const rated = g.sellers.filter(s => s.pos + s.neg >= 5);
+  const bestRate = rated.length ? Math.max(...rated.map(rate)) : null;
+  const maxRc = Math.max(...g.sellers.map(s => s.rc || 0));
+  return s => [
+    s.twd === minTwd ? '<span class="badge cheap">最便宜</span>' : "",
+    bestRate != null && s.pos + s.neg >= 5 && rate(s) === bestRate ? '<span class="badge liked">好評率最高</span>' : "",
+    (s.rc || 0) === maxRc ? '<span class="badge star">評價最多</span>' : "",
+  ].join("");
+}
+
+function rows(g, gi) {
+  const key = sortState[gi] || "price";
+  const list = [...g.sellers].sort((a, b) =>
+    key === "price" ? a.twd - b.twd :
+    key === "rate" ? (rate(b) ?? -1) - (rate(a) ?? -1) :
+    (b.rating ?? 0) - (a.rating ?? 0));
+  const minTwd = Math.min(...g.sellers.map(s => s.twd));
+  const mk = badges(g);
+  return list.map(s => {
+    const diff = s.twd - minTwd;
+    const orig = s.cur === "KRW" ? `₩${s.price.toLocaleString()}` : `${s.price.toLocaleString()} ${CUR[s.cur] || s.cur}`;
+    const n = s.pos + s.neg;
+    return `<tr class="${s.twd === minTwd ? "best" : ""}">
+      <td data-l="賣家"><div class="store">${esc(s.store)}</div><div class="plat">${PLATFORM[s.platform] || s.platform}</div><div>${mk(s)}</div></td>
+      <td data-l="價格"><div class="twd">NT$ ${s.twd.toLocaleString()}</div><div class="orig">${orig}</div>${diff ? `<div class="diff">貴 NT$ ${diff.toLocaleString()}</div>` : ""}</td>
+      <td data-l="平台星等">${s.rating != null ? `★ ${s.rating.toFixed(1)}` : "—"} <span class="muted">(${(s.rc || 0).toLocaleString()})</span></td>
+      <td data-l="好評率">${n ? `${pct(rate(s))} <span class="muted">/ ${n} 篇</span>` : '<span class="muted">尚無評論</span>'}</td>
+      <td><a class="go" href="#" onclick="return false">前往賣場 ↗</a></td>
+    </tr>`;
+  }).join("");
+}
+
+function card(g, gi) {
+  const twds = g.sellers.map(s => s.twd);
+  const min = Math.min(...twds), max = Math.max(...twds);
+  const pos = g.sellers.reduce((a, s) => a + s.pos, 0), neg = g.sellers.reduce((a, s) => a + s.neg, 0);
+  const plats = [...new Set(g.sellers.map(s => s.platform))];
+  const countryTags = [...new Set(g.sellers.map(s => s.cur))].map(c =>
+    c === "KRW" ? '<span class="tag kr">🇰🇷 韓國</span>' : '<span class="tag jp">🇯🇵 日本</span>').join("");
+  const dots = g.sellers.map(s => {
+    const x = max === min ? 50 : 4 + (s.twd - min) / (max - min) * 92;
+    return `<span class="dot ${s.twd === min ? "low" : ""}" style="left:${x}%" title="${esc(s.store)} NT$${s.twd}"></span>`;
+  }).join("");
+  return `<div class="card" id="c${gi}">
+    <div class="card-main">
+      <div class="thumb"><img src="${esc(g.img)}" alt="" loading="lazy" onerror="this.replaceWith(document.createTextNode('無圖片'))"></div>
+      <div>
+        <div class="tags">${countryTags}<span class="tag cmp">${g.sellers.length} 家賣家比價${plats.length > 1 ? "・跨平台" : ""}</span></div>
+        <p class="name">${esc(g.name)}</p>
+        <div class="brand">${esc(g.brand)} · ${esc(g.type)}</div>
+        <div class="merged">合併評論 <b>${pos + neg}</b> 篇・好評率 <b>${pct(pos + neg ? pos / (pos + neg) : null)}</b>
+          <span class="pill pos">正 ${pos}</span><span class="pill neg">負 ${neg}</span></div>
+      </div>
+      <div class="price-box">
+        <div class="price-label">最低價</div>
+        <div class="price-low">NT$ ${min.toLocaleString()}</div>
+        <div class="price-range">${min === max ? "各家同價" : `價格範圍 NT$ ${min.toLocaleString()} ～ ${max.toLocaleString()}`}</div>
+        ${max > min ? `<span class="save">最多省 NT$ ${(max - min).toLocaleString()}</span>` : ""}
+        <div class="bar">${dots}</div>
+        <button class="toggle" onclick="toggle(${gi})">展開比價 ▾</button>
+      </div>
+    </div>
+    <div class="compare">
+      <div class="cmp-head">
+        <h3>各賣家價格比較</h3>
+        <div class="sorts">
+          <button data-k="price" onclick="setSort(${gi},'price')">價格低→高</button>
+          <button data-k="rate" onclick="setSort(${gi},'rate')">好評率</button>
+          <button data-k="star" onclick="setSort(${gi},'star')">平台星等</button>
+        </div>
+      </div>
+      <table>
+        <thead><tr><th>賣家</th><th>價格</th><th>平台星等</th><th>好評率</th><th></th></tr></thead>
+        <tbody id="t${gi}">${rows(g, gi)}</tbody>
+      </table>
+      <div class="note">價格依匯率換算，僅供參考；不含運費與點數回饋。好評率由 RoBERTa 讀評論文字判斷（中立算負評）。</div>
+    </div>
+  </div>`;
+}
+
+function setSort(gi, k) {
+  sortState[gi] = k;
+  document.getElementById("t" + gi).innerHTML = rows(DATA[gi], gi);
+  document.querySelectorAll(`#c${gi} .sorts button`).forEach(b => b.classList.toggle("on", b.dataset.k === k));
+}
+function toggle(gi) {
+  const c = document.getElementById("c" + gi);
+  c.classList.toggle("open");
+  c.querySelector(".toggle").textContent = c.classList.contains("open") ? "收起比價 ▴" : "展開比價 ▾";
+}
+
+document.getElementById("list").innerHTML = DATA.map(card).join("");
+DATA.forEach((_, gi) => setSort(gi, "price"));
+toggle(0);
+const sellers = DATA.reduce((a, g) => a + g.sellers.length, 0);
+document.getElementById("status").innerHTML = `找到 <b>${DATA.length}</b> 個商品，共 <b>${sellers}</b> 個賣場（同一商品已合併）`;
+</script>
+</body>
+</html>

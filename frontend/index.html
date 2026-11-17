@@ -395,6 +395,39 @@
   .card .price-note { font-size: 11px; color: var(--ink-faint); margin-top: -2px; }
   .card .rating { font-size: 12.5px; color: var(--warn); font-weight: 700; }
 
+  /* ── 比價：同一商品不同賣家（2026-11-16） ── */
+  .tag.cmp { background: var(--accent-soft); color: var(--accent-strong); border: 1px solid var(--accent-soft-border); }
+  .cmp-line { font-size: 12.5px; color: var(--ink-soft); display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
+  .cmp-line b { color: var(--coral); font-size: 14px; }
+  .cmp-line .save { font-weight: 700; color: var(--accent-strong); background: var(--accent-soft); padding: 1px 8px; border-radius: 999px; }
+  .cmp-toggle { align-self: flex-start; font: inherit; font-size: 12.5px; font-weight: 700; color: var(--accent-strong);
+                background: none; border: 1px solid var(--accent-soft-border); border-radius: 8px; padding: 4px 10px; cursor: pointer; }
+  .cmp-toggle:hover { background: var(--accent-soft); }
+  .cmp-panel { display: none; background: #fafbf9; border: 1px solid var(--border); border-radius: 10px; padding: 8px; }
+  .cmp-panel.open { display: block; }
+  .cmp-sorts { display: flex; gap: 4px; margin-bottom: 6px; flex-wrap: wrap; }
+  .cmp-sorts button { font: inherit; font-size: 11.5px; padding: 2px 8px; border-radius: 999px; cursor: pointer;
+                      border: 1px solid var(--border); background: #fff; color: var(--ink-soft); }
+  .cmp-sorts button.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .offer { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; padding: 7px 6px; border-top: 1px solid var(--surface-2); font-size: 12.5px; }
+  .offer:first-of-type { border-top: 0; }
+  .offer.best { background: #fff7f4; border-radius: 8px; }
+  .offer .o-store { font-weight: 700; color: var(--ink); overflow-wrap: anywhere; }
+  .offer .o-plat { font-size: 11px; color: var(--ink-faint); }
+  .offer .o-price { text-align: right; font-weight: 800; font-family: ui-monospace, "Cascadia Code", Consolas, monospace; }
+  .offer .o-diff { text-align: right; font-size: 11px; color: var(--coral); font-weight: 700; }
+  .offer .o-meta { color: var(--ink-soft); font-size: 11.5px; }
+  .offer .o-go { text-align: right; font-size: 11.5px; font-weight: 700; color: var(--accent-strong); text-decoration: none; white-space: nowrap; }
+  .offer .o-go:hover { text-decoration: underline; }
+  .card .name a { color: inherit; text-decoration: none; }
+  .card .name a:hover { color: var(--accent-strong); text-decoration: underline; }
+  .go-link { margin-left: 10px; font-weight: 700; color: var(--accent-strong); text-decoration: none; }
+  .go-link:hover { text-decoration: underline; }
+  .badge { display: inline-block; font-size: 10.5px; font-weight: 800; padding: 0 6px; border-radius: 5px; margin-right: 3px; color: #fff; }
+  .badge.cheap { background: var(--coral); }
+  .badge.liked { background: var(--accent); }
+  .cmp-note { font-size: 10.5px; color: var(--ink-faint); margin-top: 6px; }
+
   .reviews-block {
     margin-top: 6px;
     padding-top: 10px;
@@ -444,20 +477,6 @@
     font-size: 14px;
   }
 
-  footer.tail {
-    margin-top: 56px;
-    padding-top: 20px;
-    border-top: 1px solid var(--border);
-    font-size: 12.5px;
-    color: var(--ink-faint);
-    text-align: center;
-  }
-  footer.tail code {
-    background: var(--surface-2);
-    padding: 1px 6px;
-    border-radius: 4px;
-    font-family: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
-  }
 
   @media (max-width: 560px) {
     .search-row { flex-direction: column; align-items: stretch; }
@@ -477,7 +496,6 @@
   </div>
 
   <header class="top">
-    <div class="eyebrow">RAG × Sentiment × Recommendation</div>
     <h1>Buy託了AI</h1>
     <p class="subtitle">日韓藥妝智慧推薦系統 — 輸入需求，找有真實評論佐證的商品</p>
   </header>
@@ -540,11 +558,6 @@
 
 </div>
 
-<footer class="tail">
-  雙擊這個檔案打開時會呼叫本機 API <code>http://localhost:8000/recommend</code>，
-  伺服器沒開的話請先在 <code>drugstore-demo</code> 資料夾執行
-  <code>python -m uvicorn api.main:app --port 8000</code>（透過網址開啟這頁時會自動改打同網域的 API，不用改設定）
-</footer>
 
 <div class="modal-overlay" id="authModal">
   <div class="modal">
@@ -610,9 +623,6 @@ const API_BASE = location.protocol === "file:" ? "http://localhost:8000" : "";
 const SUGGESTED_QUERIES = [
   { label: "防曬乳，怕曬黑", query: "防曬乳，怕曬黑", country: "JP" },
   { label: "敏感肌防曬不留白", query: "敏感肌適用防曬，不留白", country: "" },
-  { label: "乾性肌保濕精華", query: "乾性肌保濕精華", country: "" },
-  { label: "遮瑕黑眼圈", query: "遮瑕膏黑眼圈", country: "" },
-  { label: "眼影腮紅彩妝", query: "眼影腮紅彩妝", country: "" },
 ];
 
 // 商品類型選擇器：從 /product-types 拿乾淨的統一分類清單（見 scripts/classify_product_types.py），
@@ -664,7 +674,86 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+// ── 比價：同一商品不同賣家（後端 /recommend 回傳的 offers，含自己，已依台幣價格低→高） ──
+const PLATFORM_LABEL = { rakuten: "樂天市場", oliveyoung: "Olive Young", cosme: "@cosme", hwahae: "화해", matsukiyo_tw: "松本清台灣" };
+const offerStore = {};   // 卡片編號 -> offers
+let offerSeq = 0;
+
+function offerRate(o) {
+  const n = o.sentiment_positive + o.sentiment_negative;
+  return n > 0 ? o.sentiment_positive / n : null;
+}
+
+function renderOfferRows(id, key) {
+  const offers = [...offerStore[id]];
+  const priced = offers.filter(o => o.price_twd != null);
+  const min = priced.length ? Math.min(...priced.map(o => o.price_twd)) : null;
+  const rated = offers.filter(o => o.sentiment_positive + o.sentiment_negative >= 5);
+  const bestRate = rated.length ? Math.max(...rated.map(offerRate)) : null;
+  offers.sort((a, b) =>
+    key === "rate" ? (offerRate(b) ?? -1) - (offerRate(a) ?? -1) :
+    key === "star" ? (b.rating_platform ?? -1) - (a.rating_platform ?? -1) :
+    (a.price_twd ?? Infinity) - (b.price_twd ?? Infinity));
+  return offers.map(o => {
+    const n = o.sentiment_positive + o.sentiment_negative;
+    const isMin = o.price_twd != null && o.price_twd === min;
+    const diff = (o.price_twd != null && min != null) ? o.price_twd - min : 0;
+    const orig = o.price_original != null ? `${o.price_original.toLocaleString()} ${o.currency_original}` : "";
+    const badges = (isMin ? '<span class="badge cheap">最便宜</span>' : "")
+      + (bestRate != null && n >= 5 && offerRate(o) === bestRate ? '<span class="badge liked">好評率最高</span>' : "");
+    return `<div class="offer ${isMin ? "best" : ""}">
+      <div><div class="o-store">${escapeHtml(o.store) || "（未提供店名）"}</div>
+           <div class="o-plat">${escapeHtml(PLATFORM_LABEL[o.source_platform] || o.source_platform)}${orig ? " · " + escapeHtml(orig) : ""}</div></div>
+      <div><div class="o-price">${o.price_twd != null ? "NT$ " + o.price_twd.toLocaleString() : "—"}</div>
+           ${diff > 0 ? `<div class="o-diff">貴 NT$ ${diff.toLocaleString()}</div>` : ""}</div>
+      <div class="o-meta">${badges}${o.rating_platform != null ? `★ ${o.rating_platform.toFixed(1)}` : ""}${o.review_count_platform ? ` (${o.review_count_platform.toLocaleString()})` : ""}
+           ${n ? ` · 好評率 ${Math.round(offerRate(o) * 100)}%（${n} 篇）` : " · 尚無評論"}</div>
+      <a class="o-go" href="${escapeHtml(o.source_url)}" target="_blank" rel="noopener">前往 ↗</a>
+    </div>`;
+  }).join("");
+}
+
+function sortOffers(id, key) {
+  document.getElementById("offers-" + id).innerHTML = renderOfferRows(id, key);
+  document.querySelectorAll(`#cmp-${id} .cmp-sorts button`).forEach(b => b.classList.toggle("on", b.dataset.k === key));
+}
+
+function toggleOffers(id) {
+  const panel = document.getElementById("cmp-" + id);
+  panel.classList.toggle("open");
+  document.getElementById("cmpbtn-" + id).textContent =
+    (panel.classList.contains("open") ? "收起比價 ▴" : `比價 ${offerStore[id].length} 家賣家 ▾`);
+}
+
+function renderCompare(item) {
+  const offers = item.offers || [];
+  if (offers.length < 2) return { tag: "", html: "" };
+  const id = ++offerSeq;
+  offerStore[id] = offers;
+  const prices = offers.map(o => o.price_twd).filter(p => p != null);
+  const min = Math.min(...prices), max = Math.max(...prices);
+  const crossPlatform = new Set(offers.map(o => o.source_platform)).size > 1;
+  return {
+    tag: `<span class="tag cmp">${offers.length} 家比價${crossPlatform ? "・跨平台" : ""}</span>`,
+    html: `
+      <div class="cmp-line">最低 <b>NT$ ${min.toLocaleString()}</b>
+        ${max > min ? `<span>～ ${max.toLocaleString()}</span><span class="save">最多省 NT$ ${(max - min).toLocaleString()}</span>` : "<span>各家同價</span>"}
+      </div>
+      <button class="cmp-toggle" id="cmpbtn-${id}" onclick="toggleOffers(${id})">比價 ${offers.length} 家賣家 ▾</button>
+      <div class="cmp-panel" id="cmp-${id}">
+        <div class="cmp-sorts">
+          <button data-k="price" class="on" onclick="sortOffers(${id},'price')">價格低→高</button>
+          <button data-k="rate" onclick="sortOffers(${id},'rate')">好評率</button>
+          <button data-k="star" onclick="sortOffers(${id},'star')">平台星等</button>
+        </div>
+        <div id="offers-${id}">${renderOfferRows(id, "price")}</div>
+        <div class="cmp-note">價格依匯率換算成台幣，僅供參考；不含運費與點數回饋。</div>
+      </div>`,
+  };
+}
+
 function renderCard(item) {
+  const cmp = renderCompare(item);
   const originTag = item.origin === "JP"
     ? '<span class="tag origin-jp">🇯🇵 日本</span>'
     : item.origin === "KR"
@@ -690,8 +779,8 @@ function renderCard(item) {
     const statLine = `
       <div class="summary">
         評論配對 ${item.matched_review_count} 篇${posRateText ? "・" + posRateText : ""}
-        <span class="sentiment-pill pos">正 ${item.sentiment_positive}</span>
-        <span class="sentiment-pill neg">負 ${item.sentiment_negative}</span>
+        <span class="sentiment-pill pos" title="RoBERTa 判斷為正面的評論">好評 ${item.sentiment_positive}</span>
+        <span class="sentiment-pill neg" title="非好評：包含中立與負面評論">非好評 ${item.sentiment_negative}</span>
       </div>`;
 
     if (item.ai_summary && item.ai_summary.summary) {
@@ -738,6 +827,9 @@ function renderCard(item) {
     ? `<img src="${escapeHtml(item.image_url)}" alt="" loading="lazy" onerror="this.parentElement.innerHTML='<span class=&quot;placeholder&quot;>無圖片</span>'" />`
     : `<span class="placeholder">無圖片</span>`;
 
+  // 每張卡片都能連到原始商品頁（只接受 http/https，避免奇怪的 URL）
+  const goUrl = /^https?:\/\//i.test(item.source_url || "") ? item.source_url : "";
+
   return `
     <div class="card">
       <div class="thumb">${thumb}</div>
@@ -746,15 +838,21 @@ function renderCard(item) {
           ${originTag}
           <span class="tag platform">${escapeHtml(item.source_platform)}</span>
           <span class="tag similarity">相似度 ${item.similarity}</span>
+          ${cmp.tag}
         </div>
-        <div class="name" title="${escapeHtml(item.name_full || item.name)}">${escapeHtml(item.name)}</div>
+        <div class="name" title="${escapeHtml(item.name_full || item.name)}">${
+          goUrl ? `<a href="${escapeHtml(goUrl)}" target="_blank" rel="noopener">${escapeHtml(item.name)}</a>` : escapeHtml(item.name)
+        }</div>
         <div class="brand">${escapeHtml(item.brand) || "（無品牌資訊）"} · ${escapeHtml(item.product_type) || "未分類"}</div>
         <div class="price-row">
           <span class="price">${priceText}</span>
           <span class="rating">${ratingText}</span>
         </div>
         ${priceOriginalText ? `<div class="price-original">${priceOriginalText}</div>` : ""}
-        <div class="price-note">價格僅供參考</div>
+        <div class="price-note">價格僅供參考${
+          goUrl ? `<a class="go-link" href="${escapeHtml(goUrl)}" target="_blank" rel="noopener">前往商品頁 ↗</a>` : ""
+        }</div>
+        ${cmp.html}
         ${reviewsHtml}
       </div>
     </div>`;

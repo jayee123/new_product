@@ -21,3 +21,6 @@ reports/
 *.log
 *.sql
 reports/
+
+# 爬蟲用的瀏覽器設定檔（含註冊帳號的登入 cookie，不進版控）
+browser_profiles/

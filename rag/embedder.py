@@ -31,6 +31,32 @@ def get_chroma():
     return _chroma
 
 
+def _product_text_meta(p: dict) -> tuple[str, dict]:
+    """一個商品 → (拿去算向量的文字, 搜尋結果帶的 metadata)。ChromaDB 和 numpy 備援共用"""
+    name  = p.get("name_zh") or p.get("name_local", "")
+    brand = p.get("brand_zh") or p.get("brand_local", "")
+    text = " ".join(filter(None, [
+        name,
+        brand,
+        p.get("category", ""),
+        " ".join(p.get("ingredients", [])[:5]),
+    ]))
+    meta = {
+        "name":                  name,
+        "brand":                 brand,
+        "origin":                "JP" if p.get("currency") == "JPY" else "KR",
+        "image_url":             p.get("image_url", ""),
+        "price":                 p.get("price") if p.get("price") is not None else -1,
+        "currency":              p.get("currency", ""),
+        "category":              p.get("category", ""),
+        "product_type":          p.get("product_type", ""),
+        "source_platform":       p.get("source_platform", ""),
+        "rating_platform":       p.get("rating_platform") if p.get("rating_platform") is not None else -1.0,
+        "review_count_platform": p.get("review_count_platform") if p.get("review_count_platform") is not None else 0,
+    }
+    return text, meta
+
+
 # ─── 功能 1：建立商品向量索引 ───────────────────────────────────────────────
 
 def build_product_index():
@@ -49,29 +75,10 @@ def build_product_index():
     ids   = []
     metas = []
     for p in products:
-        name  = p.get("name_zh") or p.get("name_local", "")
-        brand = p.get("brand_zh") or p.get("brand_local", "")
-        text = " ".join(filter(None, [
-            name,
-            brand,
-            p.get("category", ""),
-            " ".join(p.get("ingredients", [])[:5]),
-        ]))
+        text, meta = _product_text_meta(p)
         texts.append(text)
         ids.append(p["source_url"])  # 用 URL 當唯一 ID
-        metas.append({
-            "name":                  name,
-            "brand":                 brand,
-            "origin":                "JP" if p.get("currency") == "JPY" else "KR",
-            "image_url":             p.get("image_url", ""),
-            "price":                 p.get("price") if p.get("price") is not None else -1,
-            "currency":              p.get("currency", ""),
-            "category":              p.get("category", ""),
-            "product_type":          p.get("product_type", ""),
-            "source_platform":       p.get("source_platform", ""),
-            "rating_platform":       p.get("rating_platform") if p.get("rating_platform") is not None else -1.0,
-            "review_count_platform": p.get("review_count_platform") if p.get("review_count_platform") is not None else 0,
-        })
+        metas.append(meta)
 
     embeddings = model.encode(texts, show_progress_bar=True).tolist()
     col.upsert(documents=texts, embeddings=embeddings, ids=ids, metadatas=metas)
@@ -92,8 +99,17 @@ def query_products(user_query: str, top_k: int = 5, product_type: str = None) ->
                   篩完變 0 筆。先用 where 縮小到該類型的商品，才不會有這個問題。
     """
     model  = get_model()
-    chroma = get_chroma()
-    col    = chroma.get_or_create_collection("products", metadata={"hnsw:space": "cosine"})
+    try:
+        chroma = get_chroma()
+        col    = chroma.get_or_create_collection("products", metadata={"hnsw:space": "cosine"})
+    except Exception as e:
+        # 2026-11：Windows「智慧型應用程式控制」封鎖 chromadb 的 Rust DLL，ChromaDB 整個開不起來 →
+        # 改用 numpy 備援，同一個模型、同一段商品文字，結果跟 ChromaDB 一樣
+        global _chroma_failed
+        if not _chroma_failed:
+            print(f"[RAG] ChromaDB 無法使用，改用 numpy 備援搜尋：{str(e)[:120]}")
+            _chroma_failed = True
+        return _numpy_query(user_query, top_k, product_type)
 
     if col.count() == 0:
         print("[RAG] 向量索引為空，請先執行 build_product_index()")
@@ -112,6 +128,51 @@ def query_products(user_query: str, top_k: int = 5, product_type: str = None) ->
             **results["metadatas"][0][i],
         })
     return output
+
+
+# ─── ChromaDB 開不起來時的 numpy 備援 ─────────────────────────────────────
+
+_chroma_failed = False
+_np_index = None   # (ids, texts, metas, 正規化後的向量矩陣)
+
+
+def _numpy_index():
+    """從 MongoDB 讀商品、算向量（存在 CHROMA_PATH/numpy_fallback.pkl，商品文字沒變就直接讀快取）"""
+    global _np_index
+    if _np_index is None:
+        import os
+        import pickle
+        import numpy as np
+        rows = [(p["source_url"], *_product_text_meta(p)) for p in get_all_products() if p.get("source_url")]
+        ids = [r[0] for r in rows]
+        texts = [r[1] for r in rows]
+        cache = os.path.join(CHROMA_PATH, "numpy_fallback.pkl")
+        vecs = None
+        if os.path.exists(cache):
+            with open(cache, "rb") as f:
+                c = pickle.load(f)
+            if c.get("model") == EMBED_MODEL and c.get("texts") == texts:
+                vecs = c["vecs"]
+        if vecs is None:
+            print(f"[RAG] numpy 備援：計算 {len(texts)} 個商品的向量（第一次約 1 分鐘）...")
+            vecs = get_model().encode(texts, normalize_embeddings=True, show_progress_bar=False)
+            os.makedirs(CHROMA_PATH, exist_ok=True)
+            with open(cache, "wb") as f:
+                pickle.dump({"model": EMBED_MODEL, "texts": texts, "vecs": vecs}, f)
+        _np_index = (ids, texts, [r[2] for r in rows], np.asarray(vecs, dtype=np.float32))
+    return _np_index
+
+
+def _numpy_query(user_query: str, top_k: int, product_type: str = None) -> list[dict]:
+    """跟 ChromaDB 的 cosine 查詢一樣：similarity = 餘弦相似度；有 product_type 就先篩類型再排序"""
+    import numpy as np
+    ids, texts, metas, mat = _numpy_index()
+    q = get_model().encode([user_query], normalize_embeddings=True)[0].astype(np.float32)
+    sims = mat @ q
+    idx = [i for i in np.argsort(-sims)
+           if not product_type or metas[i].get("product_type") == product_type][:top_k]
+    return [{"source_url": ids[i], "document": texts[i], "similarity": round(float(sims[i]), 4), **metas[i]}
+            for i in idx]
 
 
 # ─── 功能 3：評論 ↔ 商品 配對 ──────────────────────────────────────────────
